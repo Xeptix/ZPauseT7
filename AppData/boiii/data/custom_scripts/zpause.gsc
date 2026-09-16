@@ -1,6 +1,6 @@
 /*
 ======================================================================
-    ZPAUSE T7 v1.4  --  Synced co-op pause for Black Ops III Zombies
+    ZPAUSE T7 v1.5  --  Synced co-op pause for Black Ops III Zombies
 
     by Xep
 
@@ -66,14 +66,9 @@
 ----------------------------------------------------------------------
     NOT PORTED
 
-    One T6 feature is deliberately not here: the chat commands. Black Ops
-    III gives a script no "say" callback to bind to, so there is no
-    !pause, and everything is on the button combos -- which is why the
-    down-state combos matter as much here as on T5 and T4.
-
-    Two settings are inert rather than absent, so one config works across
-    every port: zp_allow_short_words (nothing to shorten without chat) and
-    zp_freeze_anims (the engine freeze already stops animation).
+    One setting is inert rather than absent, so that one config works
+    across every port: zp_freeze_anims, since the engine freeze already
+    stops animation here.
 
 ----------------------------------------------------------------------
     VERIFICATION
@@ -244,6 +239,7 @@ init()
     level.zp_spawn_flag_was_set = 0;
     level.zp_held_vars = [];
     level.zp_pauser_name = "someone";
+    level.zp_pauser = undefined;
     level.zp_hud = undefined;
     level.zp_hud_sub_override = undefined;
     level.zp_hud_meta = undefined;
@@ -270,6 +266,10 @@ init()
     */
     if ( !level flag::exists( "world_is_paused" ) )
         level flag::init( "world_is_paused" );
+
+    // Built once: arrays are parent variables, and the menu is opened
+    // many times a match.
+    zp_menu_table();
 
     level thread zp_endgame_safety();
     level thread zp_round_watcher();
@@ -335,8 +335,6 @@ zp_load_config()
     if ( !isdefined( level.zp ) )
         level.zp = spawnstruct();
 
-    // --- input -----------------------------------------------------
-
     // --- debug -----------------------------------------------------
     /*
         Which copy of the script runs when more than one is installed --
@@ -354,6 +352,8 @@ zp_load_config()
     level.zp.only_script = zp_cfg_int( "zp_only_script", 0 );
     level.zp.only_mod    = zp_cfg_int( "zp_only_mod", 0 );
 
+    // --- input -----------------------------------------------------
+
     /*
         Only the host may pause. With this on the script behaves as though
         the host is the only player in the game: nobody else can start or
@@ -364,13 +364,14 @@ zp_load_config()
         nobody is really the host, and it falls to whoever holds it.
     */
     level.zp.host_only = zp_cfg_int( "zp_host_only", 0 );
-    // Chat words that toggle the pause. "!p" is the short form.
+
     /*
-        Inert here. It widens the chat commands to bare words, and there
-        are no chat commands on this engine -- Black Ops III gives a script
-        no "say" callback to bind to. Created anyway, with the same name
-        and default as the other ports, so one config works everywhere.
+        The host's settings menu, opened while paused by holding fire and
+        melee. See zp_menu_watcher().
     */
+    level.zp.menu      = zp_cfg_int( "zp_menu", 1 );
+
+    // Chat words that toggle the pause. "!p" is the short form.
     level.zp.allow_short_words = zp_cfg_int( "zp_allow_short_words", 0 );
 
     // Hold two buttons together to toggle the pause.
@@ -404,8 +405,8 @@ zp_load_config()
         frag_only are also available if a build turns out to deliver a
         different set; zp_input_debug prints exactly which buttons arrive
         in which state. Setting either to "" leaves a player in that state
-        with no way to act at all, since there is no chat here to fall
-        back on -- so leave them bound unless you mean it.
+        with nothing but chat to act through -- so leave them bound unless
+        you mean it.
     */
     level.zp.button_combo_dead  = zp_cfg_str( "zp_button_combo_dead", "use_ads" );
     level.zp.vote_no_combo_dead = zp_cfg_str( "zp_vote_no_combo_dead", "use_attack" );
@@ -438,9 +439,9 @@ zp_load_config()
 
         It is a vote with an electorate of one, and reuses the whole of
         one: the same yes/no combos, the same HUD, the same clock and the
-        same timeout -- which is also what makes it work on the engines
-        with no chat. Narrowing eligibility to the host is what stops the
-        asker's own automatic yes from carrying it.
+        same timeout -- which is also what makes it work on Black Ops 4,
+        the one port with no chat. Narrowing eligibility to the host is
+        what stops the asker's own automatic yes from carrying it.
 
         Pausing only. A resume still follows zp_vote and zp_vote_unpause:
         needing the host's permission to un-pause would strand everybody
@@ -592,6 +593,7 @@ zp_load_config()
     */
     level.zp.silence_zombies   = zp_cfg_int( "zp_silence_zombies", 1 );
     level.zp.godmode           = zp_cfg_int( "zp_godmode", 1 );
+    level.zp.freeze_players    = zp_cfg_int( "zp_freeze_players", 1 );
 
     /*
         Re-assert the player freeze while the game is held. Map scripts
@@ -723,20 +725,168 @@ zp_cfg_float( dvar, def )
     return float( zp_cfg_echo( dvar, set_dvar_if_unset( dvar, "" + def ), def ) );
 }
 
+/*
+    "none" is how a string setting is emptied in game. set_dvar_if_unset()
+    takes an empty dvar for one that was never set and writes the default
+    straight back, so "" typed into the console lasted until the next read,
+    and the settings menu has no other way to write nothing.
+*/
 zp_cfg_str( dvar, def )
 {
-    return zp_cfg_echo( dvar, set_dvar_if_unset( dvar, def ), def );
+    value = zp_cfg_echo( dvar, set_dvar_if_unset( dvar, def ), def );
+
+    if ( value == "none" )
+        return "";
+
+    return value;
 }
 
 
 /* ==================================================================
-    INPUT -- NO CHAT ON THIS ENGINE
+    INPUT -- CHAT
 
-    Black Ops II binds !pause and friends to a "say" callback. Nothing of
-    the kind exists in the Black Ops III script dump, so this port is
-    button-only, the same as T5 and T4. zp_allow_short_words is created
-    for config parity and does nothing.
+    Black Ops III raises the notify; nothing in the dump listens for it,
+    which is only absence -- and absence is what had this port documented
+    as button-only for a year. It arrives on the player rather than on
+    level, with the message as its one argument:
+
+        self waittill( "say", message )
+
+    so the listener is one per player, started by zp_player_think() and
+    ended with them. Every route carries it: stock and the Workshop build
+    from the engine itself, BOIII and T7x because their own chat handlers
+    re-raise it after taking their turn with it.
+
+    "say_team" and "chat" are raised the same way and are not listened
+    for, which keeps this to the one notify T6 binds.
    ================================================================== */
+
+zp_chat_listener()
+{
+    self endon( "disconnect" );
+    level endon( "end_game" );
+
+    for (;;)
+    {
+        self waittill( "say", message );
+
+        if ( !isdefined( message ) )
+            continue;
+
+        msg = tolower( message );
+
+        if ( zp_true( level.zp_vote_active ) && zp_is_no_word( msg ) )
+            zp_cast_vote( self, 0 );
+        else if ( zp_true( level.zp_vote_active ) && zp_is_yes_word( msg ) )
+            zp_cast_vote( self, 1 );
+        else if ( zp_is_pause_word( msg ) )
+            level thread zp_request_toggle( self );
+        else if ( zp_is_unpause_word( msg ) )
+            level thread zp_request_unpause( self );
+    }
+}
+
+/*
+    Every comparison is done twice, once on the raw string and once on the
+    string less its first character. Plutonium hands T6 the message behind
+    a stray control character, and BOIII and T7x strip a leading character
+    of their own before re-raising the notify; which shape arrives here
+    depends on the route, and this costs nothing to cover both.
+*/
+zp_word_is( msg, token )
+{
+    if ( msg == token )
+        return 1;
+
+    if ( msg.size > 1 && getsubstr( msg, 1 ) == token )
+        return 1;
+
+    return 0;
+}
+
+zp_is_pause_word( msg )
+{
+    if ( zp_word_is( msg, "!pause" ) )
+        return 1;
+
+    if ( zp_word_is( msg, "!p" ) )
+        return 1;
+
+    if ( level.zp.allow_short_words )
+    {
+        if ( zp_word_is( msg, "pause" ) )
+            return 1;
+
+        if ( zp_word_is( msg, "p" ) )
+            return 1;
+    }
+
+    return 0;
+}
+
+zp_is_unpause_word( msg )
+{
+    if ( zp_word_is( msg, "!unpause" ) )
+        return 1;
+
+    if ( zp_word_is( msg, "!resume" ) )
+        return 1;
+
+    if ( zp_word_is( msg, "!u" ) )
+        return 1;
+
+    if ( level.zp.allow_short_words )
+    {
+        if ( zp_word_is( msg, "unpause" ) )
+            return 1;
+
+        if ( zp_word_is( msg, "resume" ) )
+            return 1;
+
+        if ( zp_word_is( msg, "u" ) )
+            return 1;
+    }
+
+    return 0;
+}
+
+/*
+    Only consulted while a vote is open, so the bare forms cannot cast
+    anything during normal conversation.
+*/
+zp_is_yes_word( msg )
+{
+    if ( zp_word_is( msg, "!yes" ) )
+        return 1;
+
+    if ( zp_word_is( msg, "!y" ) )
+        return 1;
+
+    if ( zp_word_is( msg, "yes" ) )
+        return 1;
+
+    if ( zp_word_is( msg, "y" ) )
+        return 1;
+
+    return 0;
+}
+
+zp_is_no_word( msg )
+{
+    if ( zp_word_is( msg, "!no" ) )
+        return 1;
+
+    if ( zp_word_is( msg, "!n" ) )
+        return 1;
+
+    if ( zp_word_is( msg, "no" ) )
+        return 1;
+
+    if ( zp_word_is( msg, "n" ) )
+        return 1;
+
+    return 0;
+}
 
 /* ==================================================================
     INPUT -- BUTTON COMBO (crouch/prone + melee by default)
@@ -912,21 +1062,25 @@ zp_button_watcher()
         if ( !level.zp.button_combo )
             continue;
 
+        // The host's menu reads these buttons while it is open.
+        if ( zp_true( self.zp_menu_open ) )
+            continue;
+
         combo = self zp_active_combo( level.zp.combo, level.zp.button_combo_dead );
 
-        if ( !( self zp_combo_pressed( combo ) ) )
+        if ( !( self zp_combo_pressed( combo ) ) || self zp_menu_combo_held() )
             continue;
 
         // Require a short hold so a crouch-melee in normal play does
         // not pause the game by accident.
         held = 0;
-        while ( ( self zp_combo_pressed( combo ) ) && held < level.zp.button_hold_time )
+        while ( ( self zp_combo_pressed( combo ) ) && !( self zp_menu_combo_held() ) && held < level.zp.button_hold_time )
         {
             held = held + 0.05;
             wait 0.05;
         }
 
-        if ( held < level.zp.button_hold_time )
+        if ( held < level.zp.button_hold_time || self zp_menu_combo_held() )
             continue;
 
         level thread zp_request_toggle( self );
@@ -1025,6 +1179,9 @@ zp_vote_no_watcher()
         if ( !zp_true( level.zp_vote_active ) || !level.zp.button_combo )
             continue;
 
+        if ( zp_true( self.zp_menu_open ) )
+            continue;
+
         combo = self zp_active_combo( level.zp.vote_no_combo, level.zp.vote_no_combo_dead );
 
         if ( !( self zp_combo_pressed( combo ) ) )
@@ -1113,7 +1270,7 @@ zp_host_blocked( player )
         return 0;
 
     if ( isdefined( player ) )
-        player iprintln( "^1[Pause]^7 only the host can pause" );
+        player zp_say( "MSG_HOST_ONLY" );
 
     return 1;
 }
@@ -1156,7 +1313,7 @@ zp_disconnect_watcher()
     if ( players.size < 1 )
         return;
 
-    zp_msg_all( "^3[Pause]^7 somebody dropped -- paused" );
+    zp_say_all( "MSG_DROPPED_PAUSED" );
     level.zp_last_toggle = gettime();
     level thread zp_do_pause( undefined );
 }
@@ -1171,7 +1328,9 @@ zp_ready_show( have, needed )
         return;
     }
 
-    level.zp_hud_sub_override = "READY  " + have + " / " + needed;
+    level.zp_hud_sub_override = "HUD_READY_COUNT";
+    level.zp_hud_sub_override_a = have;
+    level.zp_hud_sub_override_b = needed;
 }
 
 /*
@@ -1193,7 +1352,7 @@ zp_begin_pause( player )
     level.zp_pending = 1;
     level.zp_pending_by = player;
 
-    zp_msg_all( "^3[Pause]^7 pausing at the end of the round -- ask again to call it off" );
+    zp_say_all( "MSG_ROUND_END_PENDING" );
 }
 
 /*
@@ -1284,7 +1443,7 @@ zp_mark_ready( player )
             return;
 
         player.zp_ready = 1;
-        player iprintln( "^2[Pause]^7 you are ready" );
+        player zp_say( "MSG_READY" );
     }
 
     needed = zp_ready_needed();
@@ -1333,7 +1492,7 @@ zp_request_pause( player )
     if ( !zp_game_ready() )
     {
         if ( isdefined( player ) )
-            player iprintln( "^1[Pause]^7 not available yet" );
+            player zp_say( "MSG_NOT_YET" );
 
         return;
     }
@@ -1346,14 +1505,14 @@ zp_request_pause( player )
     {
         level.zp_pending = 0;
         level.zp_pending_by = undefined;
-        zp_msg_all( "^3[Pause]^7 the pause at the end of the round is off" );
+        zp_say_all( "MSG_ROUND_END_OFF" );
         return;
     }
 
     if ( zp_pauses_spent() )
     {
         if ( isdefined( player ) )
-            player iprintln( "^1[Pause]^7 no pauses left this match" );
+            player zp_say( "MSG_NO_PAUSES_LEFT" );
 
         return;
     }
@@ -1370,7 +1529,7 @@ zp_request_pause( player )
         if ( zp_vote_locked_out() )
         {
             if ( isdefined( player ) )
-                player iprintln( "^1[Pause]^7 a vote just failed -- wait a moment" );
+                player zp_say( "MSG_VOTE_COOLDOWN" );
 
             return;
         }
@@ -1426,7 +1585,7 @@ zp_request_unpause( player )
         if ( zp_vote_locked_out() )
         {
             if ( isdefined( player ) )
-                player iprintln( "^1[Pause]^7 a vote just failed -- wait a moment" );
+                player zp_say( "MSG_VOTE_COOLDOWN" );
 
             return;
         }
@@ -1511,6 +1670,7 @@ zp_do_pause( player )
     level.zp_pauser_name = "someone";
     if ( isdefined( player ) && isdefined( player.name ) )
         level.zp_pauser_name = player.name;
+    level.zp_pauser = player;
 
     /*
         Only a pause somebody asked for counts against zp_max_pauses. An
@@ -1521,6 +1681,7 @@ zp_do_pause( player )
 
     zp_ready_clear();
 
+    level.zp_counting_down = undefined;
     level notify( "zp_paused" );
 
     // 0. Ease time down, so the stop reads as deliberate rather than as a
@@ -1545,7 +1706,9 @@ zp_do_pause( player )
 
     // 2. Engine-level AI freeze. Threaded on its own so that even an
     //    unexpected failure here cannot wedge the state machine.
-    if ( level.zp.engine_freeze )
+    level.zp_engine_held = level.zp.engine_freeze;
+
+    if ( level.zp_engine_held )
         level thread zp_engine_zombies( 0 );
 
     // 3. Hold every AI in place, including anything that appears later.
@@ -1575,7 +1738,7 @@ zp_do_pause( player )
 
     // 6. Tell everybody.
     level thread zp_hud_show();
-    zp_msg_all( "^3[Pause]^7 game paused by ^3" + level.zp_pauser_name );
+    zp_say_all( "MSG_PAUSED_BY", level.zp_pauser );
     level thread zp_sound_all( level.zp.pause_sound );
 
     if ( level.zp.max_pause_time > 0 )
@@ -1598,15 +1761,16 @@ zp_do_unpause( player, label )
 
     level.zp_busy = 1;
 
-    name = "someone";
     if ( isdefined( player ) && isdefined( player.name ) )
-        name = player.name;
-    else if ( isdefined( label ) )
-        name = label;
+        zp_say_all( "MSG_RESUMING_BY", player );
+    else if ( isdefined( label ) && label == "everyone ready" )
+        zp_say_all( "MSG_RESUMING_READY" );
+    else if ( isdefined( label ) && label == "vote failed" )
+        zp_say_all( "MSG_RESUMING_VOTE_FAILED" );
     else if ( !isdefined( player ) )
-        name = "auto-resume";
-
-    zp_msg_all( "^2[Pause]^7 resuming -- requested by ^2" + name );
+        zp_say_all( "MSG_RESUMING_AUTO" );
+    else
+        zp_say_all( "MSG_RESUMING_BY" );
 
     // Countdown. Everything stays frozen for the whole countdown, so
     // nobody gets to reposition against held zombies.
@@ -1614,13 +1778,20 @@ zp_do_unpause( player, label )
 
     // One line for everybody for the duration of the countdown -- the
     // per-player combo hint has nothing to say while nobody may move.
-    level.zp_hud_sub_override = "hold still";
+    // Anyone who was roaming is locked for the countdown, so the game
+    // comes back from where everybody stands. See zp_hold_controls.
+    level.zp_counting_down = 1;
+    zp_hold_everyone();
+
+    level.zp_hud_sub_override = "HUD_HOLD_STILL";
+    level.zp_hud_sub_override_a = undefined;
+    level.zp_hud_sub_override_b = undefined;
     zp_hud_sub_refresh();
 
     while ( cd > 0 )
     {
         if ( isdefined( level.zp_hud ) )
-            level.zp_hud settext( "RESUMING IN " + cd );
+            zp_show( level.zp_hud, "HUD_RESUMING_IN", cd );
 
         level thread zp_sound_all( level.zp.countdown_sound );
         wait 1;
@@ -1634,10 +1805,13 @@ zp_do_unpause( player, label )
     // Stop every enforcer thread at once, then reverse the pause.
     level notify( "zp_thaw" );
 
-    if ( level.zp.engine_freeze )
+    // What the pause did, not what the setting says by now: the console
+    // or the host's menu can change it in between.
+    if ( zp_true( level.zp_engine_held ) )
         level thread zp_engine_zombies( 1 );
 
     zp_ai_thaw();
+    level.zp_engine_held = undefined;
 
     // Unconditional, keyed on each zombie's own flag, so turning
     // zp_freeze_anims off mid-pause can never strand one in the pose.
@@ -1798,7 +1972,9 @@ zp_ai_enforcer()
                 z.zp_anchor = z.origin;
                 z.zp_had_ignoreall = zp_true( z.ignoreall );
                 z.ignoreall = 1;
-                z setgoalpos( z.origin );
+
+                if ( !zp_keeps_goal( z ) )
+                    z setgoalpos( z.origin );
 
                 if ( level.zp.silence_zombies )
                 {
@@ -1817,12 +1993,43 @@ zp_ai_enforcer()
             if ( level.zp.drift_guard && distancesquared( z.origin, z.zp_anchor ) > level.zp.drift_tolerance )
             {
                 z setorigin( z.zp_anchor );
-                z setgoalpos( z.zp_anchor );
+
+                if ( !zp_keeps_goal( z ) )
+                    z setgoalpos( z.zp_anchor );
             }
         }
 
         wait 0.1;
     }
+}
+
+/*
+    Does this zombie keep its own goal through the pause?
+
+    The goal pinned above is a second hold behind the world freeze, and at
+    a window it does harm. A zombie on its way in is run by the behaviour
+    tree in _zm_behavior.gsc: its walk to the attack spot ends the moment
+    it is at its goal, zombiemovetoattackspotactionterminate() sets
+    at_entrance_tear_spot on the way out whatever the reason, and what the
+    tree plays next -- the board tear, or the climb through once the boards
+    are gone -- is aligned to the window. A goal at the zombie's own feet
+    reads as arrival, so the resume snapped it to the window and into the
+    tear from wherever it had been walking.
+
+    Killing Time pauses the world with setpauseworld() and pins no goal,
+    and a zombie on its way in resumes the walk. So while the world freeze
+    is what holds it, one that is not through its window yet keeps the goal
+    stock gave it. first_node is set on the way to a window and
+    completed_emerging_into_playable_area once through it, both by stock;
+    anything else is pinned as before. With zp_engine_freeze off the pin is
+    the only hold there is, and it stays.
+*/
+zp_keeps_goal( z )
+{
+    if ( !zp_true( level.zp_engine_held ) )
+        return false;
+
+    return isdefined( z.first_node ) && !zp_true( z.completed_emerging_into_playable_area );
 }
 
 zp_ai_thaw()
@@ -1921,6 +2128,11 @@ zp_player_think()
     self thread zp_button_watcher();
     self thread zp_vote_no_watcher();
     self thread zp_input_debug_watcher();
+    self thread zp_menu_watcher();
+
+    // The "say" notify is raised on the player on this engine, so the chat
+    // listener hangs off them rather than off level as it does on T6.
+    self thread zp_chat_listener();
 
     for (;;)
     {
@@ -1947,10 +2159,10 @@ zp_hint()
     if ( !level.zp.button_combo )
         return;
 
-    self iprintln( "^3[Pause]^7 hold ^3" + zp_combo_label( level.zp.combo ) + "^7 to pause or resume" );
+    self zp_say( "MSG_JOIN_HINT", level.zp.combo );
 
     if ( level.zp.vote )
-        self iprintln( "^3[Pause]^7 pauses go to a vote -- the same combo votes yes" );
+        self zp_say( "MSG_JOIN_VOTE" );
 }
 
 zp_freeze_player()
@@ -1961,16 +2173,68 @@ zp_freeze_player()
     self.zp_frozen = 1;
     self.zp_had_ignoreme = zp_true( self.ignoreme );
     self.ignoreme = 1;
-    self freezecontrols( 1 );
+    self zp_hold_controls();
 
     if ( level.zp.godmode )
-        self enableinvulnerability();
+        self zp_invulnerable();
 
     if ( level.zp.blackout )
         self zp_blackout_on();
 
     if ( level.zp.blur )
         self zp_blur_on();
+}
+
+/*
+    What the pause does to a player's controls. Locked in place -- unless
+    zp_freeze_players is off, and then they keep moving and looking and
+    only their weapons go down, so nobody fights a held zombie. Everybody
+    is locked again for the countdown, so the game comes back from where
+    they all stand, and the host is locked while the settings menu is open.
+
+    zp_locked records a lock this set, so switching to roaming lets go of
+    that and nothing else: a map script's own freezecontrols() -- a ride,
+    a cutscene -- is left where it was.
+*/
+zp_hold_controls()
+{
+    if ( level.zp.freeze_players || zp_true( level.zp_counting_down ) || zp_true( self.zp_menu_open ) )
+    {
+        self freezecontrols( 1 );
+        self.zp_locked = 1;
+        return;
+    }
+
+    if ( zp_true( self.zp_locked ) )
+    {
+        self freezecontrols( 0 );
+        self.zp_locked = undefined;
+    }
+
+    self disableweapons();
+    self.zp_weapons_down = 1;
+}
+
+zp_release_weapons()
+{
+    self.zp_locked = undefined;
+
+    if ( !zp_true( self.zp_weapons_down ) )
+        return;
+
+    self.zp_weapons_down = undefined;
+    self enableweapons();
+}
+
+zp_hold_everyone()
+{
+    players = getplayers();
+
+    for ( i = 0; i < players.size; i++ )
+    {
+        if ( isdefined( players[i] ) && zp_true( players[i].zp_frozen ) )
+            players[i] zp_hold_controls();
+    }
 }
 
 zp_unfreeze_player()
@@ -1980,6 +2244,7 @@ zp_unfreeze_player()
 
     self.zp_frozen = undefined;
     self freezecontrols( 0 );
+    self zp_release_weapons();
 
     if ( !zp_true( self.zp_had_ignoreme ) )
         self.ignoreme = 0;
@@ -1988,7 +2253,8 @@ zp_unfreeze_player()
     self zp_blackout_off();
     self zp_blur_off();
 
-    if ( level.zp.godmode )
+    // By what the pause did: zp_godmode can be changed in between.
+    if ( zp_true( self.zp_invulnerable ) )
         self thread zp_grace();
 }
 
@@ -2004,7 +2270,18 @@ zp_grace()
     if ( zp_true( level.zp_paused ) || zp_true( self.zp_frozen ) )
         return;
 
+    self.zp_invulnerable = undefined;
     self disableinvulnerability();
+}
+
+/*
+    Invulnerability the pause gave, recorded on the player, so that taking
+    it away again goes by what was done rather than by zp_godmode.
+*/
+zp_invulnerable()
+{
+    self.zp_invulnerable = 1;
+    self enableinvulnerability();
 }
 
 /*
@@ -2033,11 +2310,11 @@ zp_player_enforcer()
             if ( !isdefined( p ) || !zp_true( p.zp_frozen ) )
                 continue;
 
-            p freezecontrols( 1 );
+            p zp_hold_controls();
             p.ignoreme = 1;
 
             if ( level.zp.godmode )
-                p enableinvulnerability();
+                p zp_invulnerable();
         }
 
         wait 0.1;
@@ -2596,7 +2873,7 @@ zp_pause_yoff( line )
     Elapsed time, in minutes. Bounded to about sixty distinct strings, all
     reused, where a live second counter would burn a configstring a second.
 */
-zp_elapsed_text()
+zp_elapsed_show( elem )
 {
     secs = int( ( gettime() - level.zp_pause_start ) / 1000 );
 
@@ -2606,15 +2883,13 @@ zp_elapsed_text()
     mins = int( secs / 60 );
 
     if ( mins > 60 )
-        return "over an hour";
-
-    if ( mins < 1 )
-        return "under a minute";
-
-    if ( mins == 1 )
-        return "1 minute";
-
-    return mins + " minutes";
+        zp_show( elem, "HUD_CLOCK_OVER_HOUR" );
+    else if ( mins < 1 )
+        zp_show( elem, "HUD_CLOCK_UNDER_MINUTE" );
+    else if ( mins == 1 )
+        zp_show( elem, "HUD_CLOCK_ONE_MINUTE" );
+    else
+        zp_show( elem, "HUD_CLOCK_MINUTES", mins );
 }
 
 /*
@@ -2632,7 +2907,7 @@ zp_clock_text_updater()
         if ( !isdefined( level.zp_hud_clock ) )
             return;
 
-        zp_hud_text( level.zp_hud_clock, zp_elapsed_text() );
+        zp_elapsed_show( level.zp_hud_clock );
         wait 5;
     }
 }
@@ -2648,7 +2923,7 @@ zp_hud_show()
     zp_hud_place( level.zp_hud, level.zp.hud_position, 0 );
     level.zp_hud.color = ( 1, 0.82, 0.15 );
     zp_hud_style( level.zp_hud, 1 );
-    level.zp_hud settext( "GAME PAUSED" );
+    zp_show( level.zp_hud, "HUD_GAME_PAUSED" );
 
     if ( level.zp.hud_timer )
     {
@@ -2688,7 +2963,7 @@ zp_hud_show()
         if ( level.zp.max_pause_time > 0 )
             level.zp_hud_clock settimer( level.zp.max_pause_time - elapsed );
         else
-            zp_hud_text( level.zp_hud_clock, zp_elapsed_text() );
+            zp_elapsed_show( level.zp_hud_clock );
 
         level.zp_hud_meta = hud::createServerFontString( "default", 1.0 );
         zp_hud_place( level.zp_hud_meta, level.zp.hud_position, zp_pause_yoff( "name" ) );
@@ -2696,7 +2971,7 @@ zp_hud_show()
         zp_hud_style( level.zp_hud_meta, 0.7 );
 
         // One string per person who has ever paused, rather than one a second.
-        level.zp_hud_meta settext( "paused by " + level.zp_pauser_name );
+        zp_show( level.zp_hud_meta, "HUD_PAUSED_BY", level.zp_pauser );
 
         if ( level.zp.max_pause_time <= 0 )
             level thread zp_clock_text_updater();
@@ -2730,18 +3005,24 @@ zp_subline_create( position, yoff, scale, alpha )
 }
 
 /*
-    What the banner tells a player to do to get out of it. No chat command
-    is named: Black Ops III has no say callback, so there is nothing on
-    this engine for "!unpause" to reach, and the line was telling people
-    to type something that could never work.
+    What the banner tells a player to do to get out of it. It names
+    !unpause beside the combo, the same as the T6 build: the game raises
+    "say" on the player, and BOIII and T7x raise it themselves, so the
+    line people were never told about works on every route.
 */
-zp_pause_hint_text( player )
+zp_pause_hint_show( elem, player )
 {
     if ( isdefined( level.zp_hud_sub_override ) )
-        return level.zp_hud_sub_override;
+    {
+        zp_show( elem, level.zp_hud_sub_override, level.zp_hud_sub_override_a, level.zp_hud_sub_override_b );
+        return;
+    }
 
     if ( !level.zp.button_combo )
-        return "paused";
+    {
+        zp_show( elem, "HUD_TYPE_UNPAUSE" );
+        return;
+    }
 
     combo = level.zp.combo;
 
@@ -2749,9 +3030,9 @@ zp_pause_hint_text( player )
         combo = level.zp.button_combo_dead;
 
     if ( combo == "" )
-        return "paused";
-
-    return "hold  " + zp_combo_label( combo, level.zp.hud_binds ) + "  to resume";
+        zp_show( elem, "HUD_TYPE_UNPAUSE" );
+    else
+        zp_show( elem, "HUD_RESUME_CHAT_OR", combo );
 }
 
 zp_hud_sub_show( player )
@@ -2762,7 +3043,7 @@ zp_hud_sub_show( player )
     if ( !isdefined( player.zp_hud_sub ) )
         player.zp_hud_sub = player zp_subline_create( level.zp.hud_position, zp_pause_yoff( "hint" ), 1.25, 1 );
 
-    zp_hud_text( player.zp_hud_sub, zp_pause_hint_text( player ) );
+    zp_pause_hint_show( player.zp_hud_sub, player );
 }
 
 /*
@@ -2820,31 +3101,31 @@ zp_anyone_down()
     return 0;
 }
 
-zp_down_hint_text( kind )
+zp_down_hint_show( elem, kind )
 {
     yes_combo = level.zp.button_combo_dead;
     no_combo = level.zp.vote_no_combo_dead;
 
     if ( kind == "vote" )
     {
-        // Nothing to advertise if neither down combo is bound: there is
-        // no chat to fall back on here.
+        // A down combo left unbound puts !yes or !no in its place, the
+        // same as the T6 build: chat reaches this engine after all.
         if ( yes_combo == "" && no_combo == "" )
-            return "";
+            zp_show( elem, "HUD_DOWN_VOTE_CHAT" );
+        else if ( yes_combo == "" )
+            zp_show( elem, "HUD_DOWN_VOTE_CHAT_NO", no_combo );
+        else if ( no_combo == "" )
+            zp_show( elem, "HUD_DOWN_VOTE_YES_CHAT", yes_combo );
+        else
+            zp_show( elem, "HUD_DOWN_VOTE_YES_NO", yes_combo, no_combo );
 
-        if ( yes_combo == "" )
-            return "while down:  ^1" + zp_combo_label( no_combo, level.zp.hud_binds ) + "^7 = no";
-
-        if ( no_combo == "" )
-            return "while down:  ^2" + zp_combo_label( yes_combo, level.zp.hud_binds ) + "^7 = yes";
-
-        return "while down:  ^2" + zp_combo_label( yes_combo, level.zp.hud_binds ) + "^7 = yes  /  ^1" + zp_combo_label( no_combo, level.zp.hud_binds ) + "^7 = no";
+        return;
     }
 
     if ( yes_combo == "" )
-        return "";
-
-    return "while down:  " + zp_combo_label( yes_combo, level.zp.hud_binds );
+        zp_show( elem, "HUD_DOWN_TYPE_UNPAUSE" );
+    else
+        zp_show( elem, "HUD_DOWN_PAUSE", yes_combo );
 }
 
 zp_down_line_show( position, yoff, kind )
@@ -2863,7 +3144,7 @@ zp_down_line_show( position, yoff, kind )
         zp_hud_style( level.zp_down_line, 0.7 );
     }
 
-    zp_hud_text( level.zp_down_line, zp_down_hint_text( kind ) );
+    zp_down_hint_show( level.zp_down_line, kind );
 }
 
 zp_down_line_destroy()
@@ -2927,16 +3208,193 @@ zp_hud_destroy()
     zp_hud_sub_destroy();
 }
 
-zp_msg_all( txt )
+// ZP_TEXT_BEGIN
+/*
+    Generated by tools/mk_t7_text.py from zpause-text.json. Never edit
+    by hand -- change the table and build.
+
+    Every line a player reads comes through here by key. This is the
+    English one, which the loose-script builds draw. The Workshop build
+    carries the same functions over localized strings instead, so each
+    player there reads their own language.
+*/
+zp_say( key, a, b )
+{
+    txt = zp_text( key, a, b );
+
+    if ( txt != "" )
+        self iprintln( txt );
+}
+
+zp_say_all( key, a, b )
 {
     players = getplayers();
 
     for ( i = 0; i < players.size; i++ )
     {
         if ( isdefined( players[i] ) )
-            players[i] iprintln( txt );
+            players[i] zp_say( key, a, b );
     }
 }
+
+zp_show( elem, key, a, b )
+{
+    zp_hud_text( elem, zp_text( key, a, b ) );
+}
+
+zp_text_player( player )
+{
+    if ( isdefined( player ) && isdefined( player.name ) )
+        return player.name;
+
+    return "someone";
+}
+
+zp_text( key, a, b )
+{
+    if ( key == "" )
+        return "";
+
+    if ( key == "MSG_HOST_ONLY" )
+        return "^1[Pause]^7 only the host can pause";
+    if ( key == "MSG_DROPPED_PAUSED" )
+        return "^3[Pause]^7 somebody dropped -- paused";
+    if ( key == "MSG_ROUND_END_PENDING" )
+        return "^3[Pause]^7 pausing at the end of the round -- ask again to call it off";
+    if ( key == "MSG_READY" )
+        return "^2[Pause]^7 you are ready";
+    if ( key == "MSG_NOT_YET" )
+        return "^1[Pause]^7 not available yet";
+    if ( key == "MSG_ROUND_END_OFF" )
+        return "^3[Pause]^7 the pause at the end of the round is off";
+    if ( key == "MSG_NO_PAUSES_LEFT" )
+        return "^1[Pause]^7 no pauses left this match";
+    if ( key == "MSG_VOTE_COOLDOWN" )
+        return "^1[Pause]^7 a vote just failed -- wait a moment";
+    if ( key == "MSG_PAUSED_BY" )
+        return "^3[Pause]^7 game paused by ^3" + zp_text_player( a );
+    if ( key == "MSG_RESUMING_BY" )
+        return "^2[Pause]^7 resuming -- requested by ^2" + zp_text_player( a );
+    if ( key == "MSG_RESUMING_READY" )
+        return "^2[Pause]^7 resuming -- requested by ^2everyone ready";
+    if ( key == "MSG_RESUMING_VOTE_FAILED" )
+        return "^2[Pause]^7 resuming -- requested by ^2vote failed";
+    if ( key == "MSG_RESUMING_AUTO" )
+        return "^2[Pause]^7 resuming -- requested by ^2auto-resume";
+    if ( key == "MSG_JOIN_HINT" )
+        return "^3[Pause]^7 hold ^3" + zp_combo_label( a ) + "^7 to pause or resume";
+    if ( key == "MSG_JOIN_VOTE" )
+        return "^3[Pause]^7 pauses go to a vote -- the same combo votes yes";
+    if ( key == "MSG_VOTED_YES" )
+        return "^2[Pause]^7 your vote: ^2yes";
+    if ( key == "MSG_VOTED_NO" )
+        return "^1[Pause]^7 your vote: ^1no";
+    if ( key == "MSG_ASKS_HOST" )
+        return "^3[Pause]^7 ^3" + zp_text_player( a ) + "^7 is asking the host to pause";
+    if ( key == "MSG_VOTE_CALLED_PAUSE" )
+        return "^3[Pause]^7 ^3" + zp_text_player( a ) + "^7 called a vote to pause";
+    if ( key == "MSG_VOTE_CALLED_RESUME" )
+        return "^3[Pause]^7 ^3" + zp_text_player( a ) + "^7 called a vote to resume";
+    if ( key == "MSG_VOTE_PASSED" )
+        return "^2[Pause]^7 vote passed ^2" + a + "^7/" + b;
+    if ( key == "MSG_VOTE_FAILED" )
+        return "^1[Pause]^7 vote failed ^1" + a + "^7/" + b;
+    if ( key == "MSG_VOTE_WAITING_HOST" )
+        return "^3[Pause]^7 waiting for the host";
+    if ( key == "MSG_VOTE_HINT_NO" )
+        return "^3[Pause]^7 ^1" + zp_combo_label( a ) + "^7 = no";
+    if ( key == "MSG_VOTE_HINT_YES" )
+        return "^3[Pause]^7 ^2" + zp_combo_label( a ) + "^7 = yes";
+    if ( key == "MSG_VOTE_HINT_YES_NO" )
+        return "^3[Pause]^7 ^2" + zp_combo_label( a ) + "^7 = yes     ^1" + zp_combo_label( b ) + "^7 = no";
+    if ( key == "HUD_GAME_PAUSED" )
+        return "GAME PAUSED";
+    if ( key == "HUD_RESUMING_IN" )
+        return "RESUMING IN " + a;
+    if ( key == "HUD_PAUSED_BY" )
+        return "paused by " + zp_text_player( a );
+    if ( key == "HUD_CLOCK_UNDER_MINUTE" )
+        return "under a minute";
+    if ( key == "HUD_CLOCK_ONE_MINUTE" )
+        return "1 minute";
+    if ( key == "HUD_CLOCK_MINUTES" )
+        return "" + a + " minutes";
+    if ( key == "HUD_CLOCK_OVER_HOUR" )
+        return "over an hour";
+    if ( key == "HUD_HOLD_STILL" )
+        return "hold still";
+    if ( key == "HUD_READY_COUNT" )
+        return "READY  " + a + " / " + b;
+    if ( key == "HUD_TYPE_UNPAUSE" )
+        return "type !unpause to resume";
+    if ( key == "HUD_RESUME_CHAT_OR" )
+        return "!unpause  or  " + zp_combo_label( a, level.zp.hud_binds );
+    if ( key == "HUD_DOWN_VOTE_CHAT" )
+        return "while down:  ^2!yes^7  /  ^1!no";
+    if ( key == "HUD_DOWN_VOTE_CHAT_NO" )
+        return "while down:  ^2!yes^7  /  ^1" + zp_combo_label( a, level.zp.hud_binds ) + "^7 = no";
+    if ( key == "HUD_DOWN_VOTE_YES_CHAT" )
+        return "while down:  ^2" + zp_combo_label( a, level.zp.hud_binds ) + "^7 = yes  /  ^1!no";
+    if ( key == "HUD_DOWN_VOTE_YES_NO" )
+        return "while down:  ^2" + zp_combo_label( a, level.zp.hud_binds ) + "^7 = yes  /  ^1" + zp_combo_label( b, level.zp.hud_binds ) + "^7 = no";
+    if ( key == "HUD_DOWN_PAUSE" )
+        return "while down:  !unpause  or  " + zp_combo_label( a, level.zp.hud_binds );
+    if ( key == "HUD_DOWN_TYPE_UNPAUSE" )
+        return "while down:  type !unpause";
+    if ( key == "HUD_VOTE_WAITING_HOST" )
+        return "waiting for the host";
+    if ( key == "HUD_VOTE_HINT_NO" )
+        return "^1" + zp_combo_label( a, level.zp.hud_binds ) + "^7 = no";
+    if ( key == "HUD_VOTE_HINT_YES" )
+        return "^2" + zp_combo_label( a, level.zp.hud_binds ) + "^7 = yes";
+    if ( key == "HUD_VOTE_HINT_YES_NO" )
+        return "^2" + zp_combo_label( a, level.zp.hud_binds ) + "^7 = yes     ^1" + zp_combo_label( b, level.zp.hud_binds ) + "^7 = no";
+    if ( key == "HUD_VOTE_TITLE_REQUEST" )
+        return "PAUSE REQUEST";
+    if ( key == "HUD_VOTE_TITLE_RESUME" )
+        return "RESUME VOTE   ^2" + a + "^7 / " + b;
+    if ( key == "HUD_VOTE_TITLE_PAUSE" )
+        return "PAUSE VOTE   ^2" + a + "^7 / " + b;
+    if ( key == "HUD_VOTE_PASSED" )
+        return "^2VOTE PASSED   " + a + "^7 / " + b;
+    if ( key == "HUD_VOTE_FAILED" )
+        return "^1VOTE FAILED   " + a + "^7 / " + b;
+    if ( key == "HUD_ROW_SPECTATING" )
+        return "^7" + zp_text_player( a ) + "   ^3spectating";
+    if ( key == "HUD_ROW_NONE" )
+        return "^7" + zp_text_player( a ) + "   ^3-";
+    if ( key == "HUD_ROW_YES" )
+        return "^7" + zp_text_player( a ) + "   ^2yes";
+    if ( key == "HUD_ROW_NO" )
+        return "^7" + zp_text_player( a ) + "   ^1no";
+    if ( key == "HUD_MENU_TITLE" )
+        return "ZPAUSE SETTINGS";
+    if ( key == "HUD_MENU_HINT" )
+        return "aim / fire  move     grenade  change     melee  close";
+    if ( key == "HUD_MENU_HINT_BINDS" )
+        return "[{+speed_throw}] [{+attack}]  move     [{+frag}]  change     [{+melee}]  close";
+    if ( key == "HUD_MENU_ON" )
+        return "on";
+    if ( key == "HUD_MENU_OFF" )
+        return "off";
+    if ( key == "HUD_MENU_NONE" )
+        return "none";
+    if ( key == "HUD_MENU_DEBUG" )
+        return "debug";
+    if ( key == "HUD_MENU_INPUT" )
+        return "input";
+    if ( key == "HUD_MENU_VOTING" )
+        return "voting";
+    if ( key == "HUD_MENU_TIMING" )
+        return "timing";
+    if ( key == "HUD_MENU_FROZEN" )
+        return "what gets frozen";
+    if ( key == "HUD_MENU_PRESENTATION" )
+        return "presentation";
+
+    return key;
+}
+// ZP_TEXT_END
 
 zp_sound_all( alias )
 {
@@ -3125,9 +3583,9 @@ zp_cast_vote( player, want )
     player.zp_vote = want;
 
     if ( want )
-        player iprintln( "^2[Pause]^7 your vote: ^2yes" );
+        player zp_say( "MSG_VOTED_YES" );
     else
-        player iprintln( "^1[Pause]^7 your vote: ^1no" );
+        player zp_say( "MSG_VOTED_NO" );
 }
 
 zp_vote_start( player, kind )
@@ -3167,14 +3625,12 @@ zp_vote_start( player, kind )
     if ( level.zp.vote_initiator_yes && isdefined( player ) )
         player.zp_vote = 1;
 
-    verb = "pause";
-    if ( kind == "unpause" )
-        verb = "resume";
-
     if ( zp_true( level.zp_vote_approval ) )
-        zp_msg_all( "^3[Pause]^7 ^3" + level.zp_vote_name + "^7 is asking the host to pause" );
+        zp_say_all( "MSG_ASKS_HOST", player );
+    else if ( kind == "unpause" )
+        zp_say_all( "MSG_VOTE_CALLED_RESUME", player );
     else
-        zp_msg_all( "^3[Pause]^7 ^3" + level.zp_vote_name + "^7 called a vote to " + verb );
+        zp_say_all( "MSG_VOTE_CALLED_PAUSE", player );
 
     // The HUD spells out how to vote; only repeat it in chat without one.
     if ( !level.zp.vote_hud )
@@ -3183,8 +3639,13 @@ zp_vote_start( player, kind )
 
         for ( i = 0; i < voters.size; i++ )
         {
-            if ( isdefined( voters[i] ) )
-                voters[i] iprintln( "^3[Pause]^7 " + zp_vote_hint_text( voters[i] ) );
+            if ( !isdefined( voters[i] ) )
+                continue;
+
+            key = zp_vote_hint_key( voters[i] );
+
+            if ( key != "" )
+                voters[i] zp_say( "MSG_" + key, level.zp_hint_a, level.zp_hint_b );
         }
     }
 
@@ -3252,8 +3713,8 @@ zp_vote_finish( passed, yes, needed )
 
     if ( passed )
     {
-        zp_msg_all( "^2[Pause]^7 vote passed ^2" + yes + "^7/" + needed );
-        zp_vote_outcome( "^2VOTE PASSED   " + yes + "^7 / " + needed );
+        zp_say_all( "MSG_VOTE_PASSED", yes, needed );
+        zp_vote_outcome( "HUD_VOTE_PASSED", yes, needed );
 
         if ( kind == "unpause" )
         {
@@ -3276,8 +3737,8 @@ zp_vote_finish( passed, yes, needed )
     }
 
     level.zp_vote_last_fail = gettime();
-    zp_msg_all( "^1[Pause]^7 vote failed ^1" + yes + "^7/" + needed );
-    zp_vote_outcome( "^1VOTE FAILED   " + yes + "^7 / " + needed );
+    zp_say_all( "MSG_VOTE_FAILED", yes, needed );
+    zp_vote_outcome( "HUD_VOTE_FAILED", yes, needed );
 
     // zp_vote_hold pauses on the way in, so a failed vote has to hand the
     // game back.
@@ -3322,7 +3783,7 @@ zp_vote_stop( keep_title )
     the one place nobody is looking during a round. This holds it on the
     tally instead, where their eyes already are.
 */
-zp_vote_outcome( txt )
+zp_vote_outcome( key, a, b )
 {
     if ( !isdefined( level.zp_vote_hud ) || level.zp.vote_result_time <= 0 )
     {
@@ -3337,7 +3798,7 @@ zp_vote_outcome( txt )
         level.zp_vote_clock = undefined;
     }
 
-    zp_hud_text( level.zp_vote_hud, txt );
+    zp_show( level.zp_vote_hud, key, a, b );
     level thread zp_vote_outcome_hold();
 }
 
@@ -3357,6 +3818,608 @@ zp_vote_outcome_clear()
     zp_vote_hud_destroy();
 }
 
+
+/* ==================================================================
+    SETTINGS MENU
+
+    The host changes settings while the game is paused, without a console.
+    Only while paused, and not while a vote is open -- the host needs these
+    buttons back to vote. The host is held in place while it is open, so
+    none of them does anything in the game at the same time.
+
+    Hold fire + melee to open it. Aim and fire move through the list,
+    grenade changes the setting, melee closes it.
+
+    Never use. Use is how a player buys, opens and picks up, and World at
+    War has no script call that keeps it off a trigger; the same menu on
+    every port means none of them reads it. Fire + melee is the one pair of
+    what is left that no port offers as a pause combo. With one button to
+    change a setting, every change goes forward and wraps: a switch flips,
+    a list moves on, a number steps up through a few common values and back
+    round to the lowest. Exact values are the console's.
+
+    A change is a setdvar(), the same as typing it into the console, and
+    it lands the same way: when play resumes. The pause is built from the
+    settings it started with -- the HUD, what is frozen -- and nothing
+    rebuilds those in place.
+
+    Its own words go through zp_show() like every other line, so the
+    Workshop build draws them in each player's language. The setting names
+    and their values stay as the console spells them.
+
+    The rows come from zp_menu_table(), which tools/mk_menu_table.py writes
+    from this script's own zp_cfg calls.
+
+    Text costs configstrings (see the HUD notes): every setting name shown
+    is one, for the rest of the match. Numbers go through setvalue(), which
+    costs none, so the bill is the names and a handful of words -- bounded,
+    and paid once. The elements are the host's own, with no parent, so
+    there is nothing to take apart if the host drops with it open.
+   ================================================================== */
+
+zp_menu_watcher()
+{
+    self endon( "disconnect" );
+    level endon( "end_game" );
+
+    for (;;)
+    {
+        wait 0.05;
+
+        if ( zp_true( self.zp_menu_open ) || !zp_menu_allowed() || !zp_player_is_host( self ) )
+            continue;
+
+        if ( !( self attackbuttonpressed() && self meleebuttonpressed() ) )
+            continue;
+
+        held = 0;
+        while ( self attackbuttonpressed() && self meleebuttonpressed() && held < level.zp.button_hold_time )
+        {
+            held = held + 0.05;
+            wait 0.05;
+        }
+
+        if ( held < level.zp.button_hold_time || !zp_menu_allowed() )
+            continue;
+
+        self zp_menu_run();
+    }
+}
+
+zp_menu_allowed()
+{
+    if ( !level.zp.menu || !zp_true( level.zp_paused ) || zp_true( level.zp_busy ) )
+        return 0;
+
+    return !zp_true( level.zp_vote_active );
+}
+
+/*
+    Fire + melee, held by the host where the menu could open. The pause
+    combo gives way to it: on T5 and T4 the default combo is melee while
+    crouched, read from the stance rather than a button, so a crouched host
+    opening the menu would resume the game at the same time.
+*/
+zp_menu_combo_held()
+{
+    if ( !zp_menu_allowed() || !zp_player_is_host( self ) )
+        return 0;
+
+    return self attackbuttonpressed() && self meleebuttonpressed();
+}
+
+zp_menu_run()
+{
+    zp_menu_table();
+
+    if ( level.zp_menu_names.size == 0 )
+        return;
+
+    self.zp_menu_open = 1;
+
+    // Nothing happens until the buttons that opened it are let go.
+    self.zp_menu_last = "held";
+
+    // Roaming or not, the host stands still while it is open.
+    if ( zp_true( self.zp_frozen ) )
+        self zp_hold_controls();
+
+    if ( !isdefined( self.zp_menu_row ) || self.zp_menu_row >= level.zp_menu_names.size )
+        self.zp_menu_row = 0;
+
+    self zp_menu_draw_create();
+    self zp_menu_draw();
+
+    for (;;)
+    {
+        wait 0.05;
+
+        if ( !zp_menu_allowed() )
+            break;
+
+        input = self zp_menu_input();
+
+        if ( input == "close" )
+            break;
+
+        if ( input == "up" )
+            self zp_menu_move( -1 );
+        else if ( input == "down" )
+            self zp_menu_move( 1 );
+        else if ( input == "change" )
+            self zp_menu_change();
+    }
+
+    self zp_menu_draw_destroy();
+
+    // Grenade on its own is a pause combo, and melee is half of the default
+    // one: everything the menu reads is let go before the combos are read.
+    while ( self zp_menu_button() != "" )
+        wait 0.05;
+
+    self.zp_menu_open = undefined;
+
+    if ( zp_true( self.zp_frozen ) )
+        self zp_hold_controls();
+}
+
+/*
+    One action per press. Moving repeats while the button is held, so a
+    long list can be run through without tapping; changing and closing
+    never repeat.
+*/
+zp_menu_input()
+{
+    b = self zp_menu_button();
+
+    if ( b == "" )
+    {
+        self.zp_menu_last = "";
+        return "";
+    }
+
+    if ( self.zp_menu_last == "held" )
+        return "";
+
+    now = gettime();
+
+    if ( self.zp_menu_last != b )
+    {
+        self.zp_menu_last = b;
+        self.zp_menu_repeat = now + 400;
+        return b;
+    }
+
+    if ( b != "up" && b != "down" )
+        return "";
+
+    if ( now < self.zp_menu_repeat )
+        return "";
+
+    self.zp_menu_repeat = now + 120;
+    return b;
+}
+
+zp_menu_button()
+{
+    if ( self meleebuttonpressed() )
+        return "close";
+
+    if ( self fragbuttonpressed() )
+        return "change";
+
+    if ( self adsbuttonpressed() )
+        return "up";
+
+    if ( self attackbuttonpressed() )
+        return "down";
+
+    return "";
+}
+
+zp_menu_move( dir )
+{
+    n = level.zp_menu_names.size;
+    self.zp_menu_row = self.zp_menu_row + dir;
+
+    if ( self.zp_menu_row < 0 )
+        self.zp_menu_row = n - 1;
+
+    if ( self.zp_menu_row >= n )
+        self.zp_menu_row = 0;
+
+    self zp_menu_draw();
+}
+
+/*
+    Forwards, and round again. A number goes to the next value up from
+    wherever it is now, so one set by hand to something in between still
+    moves the right way.
+*/
+zp_menu_change()
+{
+    i = self.zp_menu_row;
+    name = level.zp_menu_names[i];
+    kind = level.zp_menu_kinds[i];
+
+    if ( kind == "flag" )
+    {
+        value = "1";
+
+        if ( getdvarint( name ) != 0 )
+            value = "0";
+    }
+    else if ( kind == "choice" )
+    {
+        list = strtok( level.zp_menu_values[i], "|" );
+        current = zp_menu_word( getdvarstring( name ) );
+        value = list[0];
+
+        for ( c = 0; c < list.size - 1; c++ )
+        {
+            if ( list[c] == current )
+                value = list[c + 1];
+        }
+    }
+    else
+    {
+        // Literals in the table, not text to parse: World at War has no
+        // float(), and the menu is the same on every port.
+        current = getdvarfloat( name );
+        first = level.zp_menu_firsts[i];
+        value = level.zp_menu_nums[first];
+
+        for ( c = first + level.zp_menu_counts[i] - 1; c >= first; c-- )
+        {
+            if ( level.zp_menu_nums[c] > current + 0.001 )
+                value = level.zp_menu_nums[c];
+        }
+
+        value = "" + value;
+    }
+
+    setdvar( name, value );
+    self zp_menu_draw();
+}
+
+// Nothing is "none", which zp_cfg_str() reads back as nothing.
+zp_menu_word( value )
+{
+    if ( value == "" )
+        return "none";
+
+    return value;
+}
+
+zp_menu_draw_create()
+{
+    self zp_menu_draw_destroy();
+
+    bg = newclienthudelem( self );
+    bg.alignx = "center";
+    bg.aligny = "middle";
+    bg.horzalign = "center";
+    bg.vertalign = "middle";
+    bg.x = 0;
+    bg.y = 5;
+
+    // Over the pause HUD, whose text sorts at 1000.
+    bg.sort = 1001;
+    bg.foreground = 1;
+    bg.color = ( 0, 0, 0 );
+    bg setshader( "black", 470, 290 );
+    bg.alpha = 0.8;
+    self.zp_menu_bg = bg;
+
+    self.zp_menu_title = self zp_menu_text( "objective", 1.5, "center", 0, -120 );
+    self.zp_menu_title.color = ( 1, 0.82, 0.15 );
+    zp_show( self.zp_menu_title, "HUD_MENU_TITLE" );
+
+    self.zp_menu_section = self zp_menu_text( "default", 1.2, "center", 0, -95 );
+
+    // What the setting under the cursor does, in the README's own words --
+    // the menu table carries the line, cut to the width of the panel. The
+    // headings are localized; this line and the setting names are not, the
+    // same as the values, which are what the console takes in any language.
+    self.zp_menu_desc = self zp_menu_text( "default", 1, "center", 0, 100 );
+    self.zp_menu_desc.color = ( 0.72, 0.72, 0.72 );
+
+    self.zp_menu_hint = self zp_menu_text( "default", 1.1, "center", 0, 130 );
+
+    self.zp_menu_names_e = [];
+    self.zp_menu_values_e = [];
+
+    /*
+        Seven rows, not nine. A player is only sent so many HUD elements at
+        once -- the pause HUD, the blackout, the build stamp and whatever
+        else is on screen come out of the same allowance -- and past it the
+        newest are silently not drawn, which cut the bottom rows off on
+        Black Ops II. Moving the menu to the unarchived list (archived = 0)
+        only made it worse there: four rows rather than eight.
+    */
+    for ( j = 0; j < 7; j++ )
+    {
+        self.zp_menu_names_e[j] = self zp_menu_text( "default", 1.2, "left", -215, -65 + j * 22 );
+        self.zp_menu_values_e[j] = self zp_menu_text( "default", 1.2, "right", 215, -65 + j * 22 );
+    }
+}
+
+zp_menu_text( font, scale, alignx, x, y )
+{
+    e = newclienthudelem( self );
+    e.font = font;
+    e.fontscale = scale;
+    e.alignx = alignx;
+    e.aligny = "middle";
+    e.horzalign = "center";
+    e.vertalign = "middle";
+    e.x = x;
+    e.y = y;
+    e.color = ( 0.85, 0.85, 0.85 );
+    zp_hud_style( e, 1 );
+
+    // Above the menu's backing, which is over the pause HUD.
+    e.sort = 1002;
+
+    return e;
+}
+
+zp_menu_draw()
+{
+    if ( !isdefined( self.zp_menu_names_e ) )
+        return;
+
+    n = level.zp_menu_names.size;
+    row = self.zp_menu_row;
+
+    // Keep the chosen row on screen.
+    if ( !isdefined( self.zp_menu_top ) )
+        self.zp_menu_top = 0;
+
+    if ( row < self.zp_menu_top )
+        self.zp_menu_top = row;
+
+    if ( row > self.zp_menu_top + 6 )
+        self.zp_menu_top = row - 6;
+
+    zp_menu_section_show( self.zp_menu_section, level.zp_menu_sections[row] );
+    zp_hud_text( self.zp_menu_desc, level.zp_menu_descs[row] );
+
+    if ( level.zp.hud_binds )
+        zp_show( self.zp_menu_hint, "HUD_MENU_HINT_BINDS" );
+    else
+        zp_show( self.zp_menu_hint, "HUD_MENU_HINT" );
+
+    for ( j = 0; j < 7; j++ )
+    {
+        i = self.zp_menu_top + j;
+        name_e = self.zp_menu_names_e[j];
+        value_e = self.zp_menu_values_e[j];
+
+        if ( i >= n )
+        {
+            zp_hud_text( name_e, "" );
+            zp_hud_text( value_e, "" );
+            continue;
+        }
+
+        colour = ( 0.85, 0.85, 0.85 );
+
+        if ( i == row )
+            colour = ( 1, 0.82, 0.15 );
+
+        name_e.color = colour;
+        value_e.color = colour;
+
+        zp_hud_text( name_e, level.zp_menu_names[i] );
+        zp_menu_value( value_e, i );
+    }
+}
+
+zp_menu_value( e, i )
+{
+    name = level.zp_menu_names[i];
+    kind = level.zp_menu_kinds[i];
+
+    if ( kind == "number" )
+    {
+        // A number costs no configstring. The text cache has to forget, or
+        // the next word written to this element would look unchanged.
+        e.zp_txt = undefined;
+        e setvalue( getdvarfloat( name ) );
+        return;
+    }
+
+    if ( kind == "choice" )
+    {
+        value = zp_menu_word( getdvarstring( name ) );
+
+        if ( value == "none" )
+            zp_show( e, "HUD_MENU_NONE" );
+        else
+            zp_hud_text( e, value );
+
+        return;
+    }
+
+    if ( getdvarint( name ) != 0 )
+        zp_show( e, "HUD_MENU_ON" );
+    else
+        zp_show( e, "HUD_MENU_OFF" );
+}
+
+// The section headings are the script's own, so each one has a line.
+zp_menu_section_show( elem, section )
+{
+    if ( section == "debug" )
+        zp_show( elem, "HUD_MENU_DEBUG" );
+    else if ( section == "input" )
+        zp_show( elem, "HUD_MENU_INPUT" );
+    else if ( section == "voting" )
+        zp_show( elem, "HUD_MENU_VOTING" );
+    else if ( section == "timing" )
+        zp_show( elem, "HUD_MENU_TIMING" );
+    else if ( section == "what gets frozen" )
+        zp_show( elem, "HUD_MENU_FROZEN" );
+    else if ( section == "presentation" )
+        zp_show( elem, "HUD_MENU_PRESENTATION" );
+    else
+        zp_hud_text( elem, section );
+}
+
+zp_menu_draw_destroy()
+{
+    if ( isdefined( self.zp_menu_bg ) )
+    {
+        self.zp_menu_bg destroy();
+        self.zp_menu_bg = undefined;
+    }
+
+    zp_hud_free( self.zp_menu_title );
+    zp_hud_free( self.zp_menu_section );
+    zp_hud_free( self.zp_menu_desc );
+    zp_hud_free( self.zp_menu_hint );
+    self.zp_menu_title = undefined;
+    self.zp_menu_section = undefined;
+    self.zp_menu_desc = undefined;
+    self.zp_menu_hint = undefined;
+
+    if ( isdefined( self.zp_menu_names_e ) )
+    {
+        for ( j = 0; j < self.zp_menu_names_e.size; j++ )
+        {
+            zp_hud_free( self.zp_menu_names_e[j] );
+            zp_hud_free( self.zp_menu_values_e[j] );
+        }
+    }
+
+    self.zp_menu_names_e = undefined;
+    self.zp_menu_values_e = undefined;
+    self.zp_menu_top = undefined;
+}
+
+// ZP_MENU_BEGIN
+/*
+    Generated by tools/mk_menu_table.py from this script's zp_cfg calls.
+    Never edit by hand. One row per setting the host's menu offers: how
+    it changes -- flag, number or choice -- and what it steps through.
+*/
+zp_menu_table()
+{
+    if ( isdefined( level.zp_menu_names ) )
+        return;
+
+    level.zp_menu_names = [];
+    level.zp_menu_kinds = [];
+    level.zp_menu_values = [];
+    level.zp_menu_sections = [];
+    level.zp_menu_descs = [];
+    level.zp_menu_firsts = [];
+    level.zp_menu_counts = [];
+    level.zp_menu_nums = [];
+
+    zp_menu_row( "zp_host_only", "flag", "", "input", "Only the host can pause or resume. Everyone else's chat command and combo are ignored, and a pause never goes..." );
+    zp_menu_row( "zp_allow_short_words", "flag", "", "input", "Also accept bare p / u / pause in chat. Off by default so normal conversation can't pause the game." );
+    zp_menu_row( "zp_button_combo", "flag", "", "input", "Enable the button combos." );
+    zp_menu_row( "zp_combo", "choice", "crouch_melee|crouch_use|crouch_frag|crouch_ads|jump_melee|use_frag|frag_only|use_ads|use_attack|attack_ads", "input", "Which combo pauses." );
+    zp_menu_row( "zp_button_hold_time", "number", "", "input", "How long the combo must be held." );
+    zp_menu_num( 0.1 ); zp_menu_num( 0.2 ); zp_menu_num( 0.3 ); zp_menu_num( 0.5 ); zp_menu_num( 0.75 ); zp_menu_num( 1 ); zp_menu_num( 1.5 ); zp_menu_num( 2 );
+    zp_menu_row( "zp_button_combo_dead", "choice", "use_ads|use_attack|attack_ads|use_frag|frag_only|none|crouch_use|crouch_frag|crouch_ads|crouch_melee", "input", "Combo used while downed or spectating, when stance and melee stop registering. none = chat only." );
+    zp_menu_row( "zp_vote_no_combo_dead", "choice", "use_attack|crouch_use|crouch_frag|crouch_ads|crouch_melee|use_frag|frag_only|use_ads|attack_ads", "input", "The same, for a no vote." );
+    zp_menu_row( "zp_input_debug", "flag", "", "input", "Print each player which buttons the server receives from them, for picking the two above." );
+    zp_menu_row( "zp_ready_check", "flag", "", "voting", "Resuming waits for the players to say they're back. Not a vote - nobody says no and it can't fail, so it..." );
+    zp_menu_row( "zp_ready_percent", "number", "", "voting", "How much of the room has to be ready. 100 is everybody." );
+    zp_menu_num( 25 ); zp_menu_num( 50 ); zp_menu_num( 75 ); zp_menu_num( 100 );
+    zp_menu_row( "zp_host_approve", "flag", "", "voting", "The host pauses at once; anyone else has to ask and the host answers yes or no. It runs as a vote only the..." );
+    zp_menu_row( "zp_vote", "flag", "", "voting", "Put pauses to a vote. See Voting." );
+    zp_menu_row( "zp_vote_min", "number", "", "voting", "Minimum yes votes, whatever the player count." );
+    zp_menu_num( 1 ); zp_menu_num( 2 ); zp_menu_num( 3 ); zp_menu_num( 4 ); zp_menu_num( 6 ); zp_menu_num( 8 );
+    zp_menu_row( "zp_vote_percent", "number", "", "voting", "Percent of players who must vote yes." );
+    zp_menu_num( 25 ); zp_menu_num( 34 ); zp_menu_num( 50 ); zp_menu_num( 51 ); zp_menu_num( 67 ); zp_menu_num( 75 ); zp_menu_num( 100 );
+    zp_menu_row( "zp_vote_time", "number", "", "voting", "Seconds a vote stays open." );
+    zp_menu_num( 10 ); zp_menu_num( 15 ); zp_menu_num( 20 ); zp_menu_num( 30 ); zp_menu_num( 45 ); zp_menu_num( 60 ); zp_menu_num( 90 ); zp_menu_num( 120 );
+    zp_menu_row( "zp_vote_unpause", "flag", "", "voting", "Resuming needs a vote too." );
+    zp_menu_row( "zp_vote_hold", "flag", "", "voting", "Freeze the game while the vote runs, and resume it if the vote fails." );
+    zp_menu_row( "zp_vote_initiator_yes", "flag", "", "voting", "Whoever called the vote counts as a yes." );
+    zp_menu_row( "zp_vote_lockout", "number", "", "voting", "Seconds before another vote can be called after one fails." );
+    zp_menu_num( 0 ); zp_menu_num( 5 ); zp_menu_num( 10 ); zp_menu_num( 20 ); zp_menu_num( 30 ); zp_menu_num( 60 ); zp_menu_num( 120 );
+    zp_menu_row( "zp_vote_hud", "flag", "", "voting", "Show the vote tally on screen." );
+    zp_menu_row( "zp_vote_show_voters", "flag", "", "voting", "List each player and how they voted." );
+    zp_menu_row( "zp_vote_hud_position", "choice", "top|bottom|middle|left|right", "voting", "Where the vote tally sits. See Where the HUD sits." );
+    zp_menu_row( "zp_vote_alive_only", "flag", "", "voting", "Leave bled-out spectators out of the threshold and the count." );
+    zp_menu_row( "zp_vote_result_time", "number", "", "voting", "Seconds the result stands on the tally after a vote resolves. 0 = clear at once." );
+    zp_menu_num( 0 ); zp_menu_num( 1 ); zp_menu_num( 2 ); zp_menu_num( 3 ); zp_menu_num( 5 ); zp_menu_num( 10 );
+    zp_menu_row( "zp_vote_no_combo", "choice", "jump_melee|crouch_use|crouch_frag|crouch_ads|crouch_melee|use_frag|frag_only|use_ads|use_attack|attack_ads", "voting", "Combo for a no vote." );
+    zp_menu_row( "zp_round_pause", "flag", "", "timing", "Hold a pause until the round is over instead of freezing the game mid-horde. Asking again calls it off." );
+    zp_menu_row( "zp_max_pauses", "number", "", "timing", "How many times one match can be paused. 0 is no cap. Only a pause somebody asked for spends one - an..." );
+    zp_menu_num( 0 ); zp_menu_num( 1 ); zp_menu_num( 2 ); zp_menu_num( 3 ); zp_menu_num( 5 ); zp_menu_num( 10 ); zp_menu_num( 20 );
+    zp_menu_row( "zp_pause_on_disconnect", "flag", "", "timing", "Pause when somebody drops, so whoever is left isn't overrun while they rejoin. Nothing un-pauses on its own..." );
+    zp_menu_row( "zp_countdown", "number", "", "timing", "Seconds of 3-2-1 before play resumes." );
+    zp_menu_num( 0 ); zp_menu_num( 1 ); zp_menu_num( 2 ); zp_menu_num( 3 ); zp_menu_num( 5 ); zp_menu_num( 10 );
+    zp_menu_row( "zp_ease", "flag", "", "timing", "Ease time down into the pause and back out, instead of cutting to a stop." );
+    zp_menu_row( "zp_ease_time", "number", "", "timing", "Seconds of ramp at each end." );
+    zp_menu_num( 0 ); zp_menu_num( 0.1 ); zp_menu_num( 0.2 ); zp_menu_num( 0.35 ); zp_menu_num( 0.5 ); zp_menu_num( 0.75 ); zp_menu_num( 1 );
+    zp_menu_row( "zp_grace", "number", "", "timing", "Seconds of invulnerability after resuming." );
+    zp_menu_num( 0 ); zp_menu_num( 1 ); zp_menu_num( 2 ); zp_menu_num( 3 ); zp_menu_num( 5 ); zp_menu_num( 10 );
+    zp_menu_row( "zp_cooldown", "number", "", "timing", "Minimum seconds between toggles." );
+    zp_menu_num( 0 ); zp_menu_num( 1 ); zp_menu_num( 2 ); zp_menu_num( 3 ); zp_menu_num( 5 ); zp_menu_num( 10 ); zp_menu_num( 30 );
+    zp_menu_row( "zp_max_pause_time", "number", "", "timing", "Auto-resume after N seconds. 0 = unlimited." );
+    zp_menu_num( 0 ); zp_menu_num( 60 ); zp_menu_num( 120 ); zp_menu_num( 300 ); zp_menu_num( 600 ); zp_menu_num( 900 ); zp_menu_num( 1800 ); zp_menu_num( 3600 );
+    zp_menu_row( "zp_engine_freeze", "flag", "", "what gets frozen", "Use setpauseworld() and the world_is_paused flag." );
+    zp_menu_row( "zp_drift_guard", "flag", "", "what gets frozen", "Snap back any AI that still manages to move." );
+    zp_menu_row( "zp_freeze_anims", "flag", "", "what gets frozen", "No effect on this engine - the world freeze already stops animation." );
+    zp_menu_row( "zp_silence_zombies", "flag", "", "what gets frozen", "Stop zombies growling while paused." );
+    zp_menu_row( "zp_godmode", "flag", "", "what gets frozen", "Make players invulnerable while paused." );
+    zp_menu_row( "zp_freeze_players", "flag", "", "what gets frozen", "Lock players in place while paused. 0 lets them walk around with their weapons down, locked again for the..." );
+    zp_menu_row( "zp_control_guard", "flag", "", "what gets frozen", "Re-apply the player freeze every tick, so a map script can't hand controls back mid-pause." );
+    zp_menu_row( "zp_freeze_clock", "flag", "", "what gets frozen", "Hold the match timer." );
+    zp_menu_row( "zp_freeze_powerups", "flag", "", "what gets frozen", "Stop ground powerups timing out." );
+    zp_menu_row( "zp_freeze_effects", "flag", "", "what gets frozen", "Hold insta-kill / double-points countdowns." );
+    zp_menu_row( "zp_freeze_bleedout", "flag", "", "what gets frozen", "Stop downed players bleeding out." );
+    zp_menu_row( "zp_hud", "flag", "", "presentation", "Draw the pause block at all. The vote HUD is separate and still draws." );
+    zp_menu_row( "zp_blackout", "flag", "", "presentation", "Dim everyone's screen while paused, which keeps the pause text readable over a bright skybox. Raise..." );
+    zp_menu_row( "zp_blackout_alpha", "number", "", "presentation", "How far it dims. 0.2 is a light darkening; 1 is fully black." );
+    zp_menu_num( 0.1 ); zp_menu_num( 0.2 ); zp_menu_num( 0.35 ); zp_menu_num( 0.5 ); zp_menu_num( 0.65 ); zp_menu_num( 0.8 ); zp_menu_num( 1 );
+    zp_menu_row( "zp_show_hint", "flag", "", "presentation", "Tell players how to pause when they spawn." );
+    zp_menu_row( "zp_hud_position", "choice", "center|top|bottom|middle|left|right", "presentation", "Where the pause banner sits. See Where the HUD sits." );
+    zp_menu_row( "zp_hud_binds", "flag", "", "presentation", "Draw combos as each player's bound buttons instead of words." );
+    zp_menu_row( "zp_hud_glow", "flag", "", "presentation", "Black glow behind the HUD text, to carry it over a bright skybox." );
+    zp_menu_row( "zp_hud_panel", "flag", "", "presentation", "Black slab behind the whole block. Heavier than the glow." );
+    zp_menu_row( "zp_hud_panel_alpha", "number", "", "presentation", "How opaque that slab is. 1 is solid black." );
+    zp_menu_num( 0.2 ); zp_menu_num( 0.35 ); zp_menu_num( 0.45 ); zp_menu_num( 0.6 ); zp_menu_num( 0.8 ); zp_menu_num( 1 );
+    zp_menu_row( "zp_hud_panel_width", "number", "", "presentation", "How wide it is, in HUD units." );
+    zp_menu_num( 240 ); zp_menu_num( 300 ); zp_menu_num( 340 ); zp_menu_num( 400 ); zp_menu_num( 480 ); zp_menu_num( 560 ); zp_menu_num( 640 );
+    zp_menu_row( "zp_hud_timer", "flag", "", "presentation", "Show who paused and how long it has been. Minutes, not mm:ss - see below." );
+    zp_menu_row( "zp_blur", "flag", "", "presentation", "Blur everyone's screen while paused. Clears when play resumes." );
+    zp_menu_row( "zp_blur_amount", "number", "", "presentation", "Blur strength. 4 is the blur the game runs when you buy a perk." );
+    zp_menu_num( 0.5 ); zp_menu_num( 1 ); zp_menu_num( 1.5 ); zp_menu_num( 2 ); zp_menu_num( 3 ); zp_menu_num( 4 ); zp_menu_num( 6 );
+    zp_menu_row( "zp_pause_sound", "choice", "zmb_bgb_killingtime_start|none", "presentation", "Played when the game is paused. none = silent." );
+    zp_menu_row( "zp_countdown_sound", "choice", "zmb_finalcountdown_timer_marker|none", "presentation", "Played on each countdown tick. none = silent." );
+    zp_menu_row( "zp_resume_sound", "choice", "zmb_bgb_killingtime_end|none", "presentation", "Played when play resumes. none = silent." );
+}
+
+zp_menu_row( name, kind, values, section, desc )
+{
+    i = level.zp_menu_names.size;
+
+    level.zp_menu_names[i] = name;
+    level.zp_menu_kinds[i] = kind;
+    level.zp_menu_values[i] = values;
+    level.zp_menu_sections[i] = section;
+    level.zp_menu_descs[i] = desc;
+    level.zp_menu_firsts[i] = level.zp_menu_nums.size;
+    level.zp_menu_counts[i] = 0;
+}
+
+// One of the values the row just added steps through.
+zp_menu_num( value )
+{
+    i = level.zp_menu_names.size - 1;
+
+    level.zp_menu_nums[level.zp_menu_nums.size] = value;
+    level.zp_menu_counts[i] = level.zp_menu_counts[i] + 1;
+}
+// ZP_MENU_END
 
 /* ==================================================================
     VOTE HUD
@@ -3384,11 +4447,19 @@ zp_hud_text( elem, txt )
     distinct string handed to settext() takes a configstring, and a line
     rewritten once a second burns the pool.
 */
-zp_vote_hint_text( player, binds )
+/*
+    Which vote hint this player gets, as a key the HUD draws with HUD_ in
+    front and chat prints with MSG_ in front. The combos it needs are left
+    in level.zp_hint_a and level.zp_hint_b for the caller to hand on.
+*/
+zp_vote_hint_key( player )
 {
+    level.zp_hint_a = undefined;
+    level.zp_hint_b = undefined;
+
     // Only the host can answer an approval, so nobody else is told how.
     if ( zp_true( level.zp_vote_approval ) && !zp_player_is_host( player ) )
-        return "waiting for the host";
+        return "VOTE_WAITING_HOST";
 
     if ( !level.zp.button_combo )
         return "";
@@ -3408,12 +4479,20 @@ zp_vote_hint_text( player, binds )
         return "";
 
     if ( yes_combo == "" )
-        return "^1" + zp_combo_label( no_combo, binds ) + "^7 = no";
+    {
+        level.zp_hint_a = no_combo;
+        return "VOTE_HINT_NO";
+    }
 
     if ( no_combo == "" )
-        return "^2" + zp_combo_label( yes_combo, binds ) + "^7 = yes";
+    {
+        level.zp_hint_a = yes_combo;
+        return "VOTE_HINT_YES";
+    }
 
-    return "^2" + zp_combo_label( yes_combo, binds ) + "^7 = yes     ^1" + zp_combo_label( no_combo, binds ) + "^7 = no";
+    level.zp_hint_a = yes_combo;
+    level.zp_hint_b = no_combo;
+    return "VOTE_HINT_YES_NO";
 }
 
 zp_vote_sub_show( player )
@@ -3424,7 +4503,12 @@ zp_vote_sub_show( player )
     if ( !isdefined( player.zp_vote_sub ) )
         player.zp_vote_sub = player zp_subline_create( level.zp.vote_hud_position, 52, 1.1, 0.75 );
 
-    zp_hud_text( player.zp_vote_sub, zp_vote_hint_text( player, level.zp.hud_binds ) );
+    key = zp_vote_hint_key( player );
+
+    if ( key != "" )
+        key = "HUD_" + key;
+
+    zp_show( player.zp_vote_sub, key, level.zp_hint_a, level.zp_hint_b );
 }
 
 zp_vote_sub_destroy()
@@ -3466,13 +4550,11 @@ zp_vote_hud_update( yes, needed, secs )
     }
 
     if ( zp_true( level.zp_vote_approval ) )
-        title = "PAUSE REQUEST";
+        zp_show( level.zp_vote_hud, "HUD_VOTE_TITLE_REQUEST" );
     else if ( level.zp_vote_kind == "unpause" )
-        title = "RESUME VOTE   ^2" + yes + "^7 / " + needed;
+        zp_show( level.zp_vote_hud, "HUD_VOTE_TITLE_RESUME", yes, needed );
     else
-        title = "PAUSE VOTE   ^2" + yes + "^7 / " + needed;
-
-    zp_hud_text( level.zp_vote_hud, title );
+        zp_show( level.zp_vote_hud, "HUD_VOTE_TITLE_PAUSE", yes, needed );
 
     // Recolouring an element costs nothing, unlike rewriting its text.
     if ( isdefined( level.zp_vote_clock ) )
@@ -3535,20 +4617,14 @@ zp_vote_hud_rows()
             level.zp_vote_rows[i] = e;
         }
 
-        name = "player";
-        if ( isdefined( p.name ) )
-            name = p.name;
-
         if ( !zp_vote_eligible( p ) )
-            txt = "^7" + name + "   ^3spectating";
+            zp_show( level.zp_vote_rows[i], "HUD_ROW_SPECTATING", p );
         else if ( !isdefined( p.zp_vote ) )
-            txt = "^7" + name + "   ^3-";
+            zp_show( level.zp_vote_rows[i], "HUD_ROW_NONE", p );
         else if ( p.zp_vote == 1 )
-            txt = "^7" + name + "   ^2yes";
+            zp_show( level.zp_vote_rows[i], "HUD_ROW_YES", p );
         else
-            txt = "^7" + name + "   ^1no";
-
-        zp_hud_text( level.zp_vote_rows[i], txt );
+            zp_show( level.zp_vote_rows[i], "HUD_ROW_NO", p );
     }
 }
 
@@ -3672,9 +4748,9 @@ zp_cfg_echo( dvar, value, def )
 
     zp_load_config() runs on every pause request already, so pausing has
     always used current settings. This is for the ones the input watchers
-    read continuously -- zp_combo above all, which could not be changed by
-    hand at all where there is no chat command, because changing it needed
-    a pause and the combo is what asks for one.
+    read continuously -- zp_combo above all, which without the chat
+    commands could not be changed by hand at all, because changing it
+    needed a pause and the combo is what asks for one.
 
     Not while paused or busy: the HUD is built from these when the pause
     starts and nothing rebuilds it in place, so moving them underneath
@@ -3817,19 +4893,27 @@ zp_endgame_safety()
 
         p zp_blackout_off();
         p zp_blur_off();
+        p zp_menu_draw_destroy();
+        p.zp_menu_open = undefined;
 
         if ( zp_true( p.zp_frozen ) )
         {
             p.zp_frozen = undefined;
             p freezecontrols( 0 );
+            p zp_release_weapons();
 
-            if ( level.zp.godmode )
+            if ( zp_true( p.zp_invulnerable ) )
+            {
+                p.zp_invulnerable = undefined;
                 p disableinvulnerability();
+            }
         }
     }
 
-    if ( level.zp.engine_freeze && zp_true( level.zp_paused ) )
+    if ( zp_true( level.zp_engine_held ) )
         level thread zp_engine_zombies( 1 );
+
+    level.zp_engine_held = undefined;
 
     level.zp_paused = 0;
     level.zp_busy = 0;
