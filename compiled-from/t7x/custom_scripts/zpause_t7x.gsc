@@ -1,6 +1,6 @@
 /*
 ======================================================================
-    ZPAUSE T7 (T7x) v1.5  --  Synced co-op pause for Black Ops III Zombies
+    ZPAUSE T7 (T7x) v1.6  --  Synced co-op pause for Black Ops III Zombies
 
     by Xep
 
@@ -146,6 +146,29 @@ function zp_origin_allowed()
     return 1;
 }
 
+/*
+    Whether ZPause is installed this match. Black Ops III is the one port
+    where the player callbacks are registered outside init() -- the system
+    manager runs __init__ and the shared callbacks fire from there -- so
+    init()'s own gate does not reach them, and a switched-off ZPause still
+    gave every player a watcher, a button combo and a pause. Everything the
+    callbacks start asks this first.
+
+    The config struct once init() has read it, and the dvar before that: a
+    player can be connected before the gametype starts, and a callback that
+    cannot answer would be one that guesses.
+*/
+function zp_switched_on()
+{
+    if ( zp_true( level.zp_off ) )
+        return 0;
+
+    if ( isdefined( level.zp ) && isdefined( level.zp.enabled ) )
+        return level.zp.enabled;
+
+    return getdvarstring( "zp_enabled" ) != "0";
+}
+
 function autoexec __init__sytem__()
 {
     system::register( "zpause", &__init__, undefined, undefined );
@@ -154,14 +177,10 @@ function autoexec __init__sytem__()
 function __init__()
 {
     /*
-        Before the callbacks, not only in init(): both copies register
-        their own, under different system names, and the losing copy's
-        on_spawned would otherwise still fire and could win the
-        self.zp_thinking race.
+        The gate is on each callback rather than here, the same as the
+        Workshop build, so the two files differ only in what they stand
+        in for. Nothing of the game's hangs off these ones.
     */
-    if ( !zp_origin_allowed() )
-        return;
-
     callback::on_start_gametype( &init );
     callback::on_connect( &on_player_connect );
     callback::on_spawned( &zp_on_spawned );
@@ -174,11 +193,17 @@ function init()
 
 function on_player_connect()
 {
+    if ( !zp_origin_allowed() || !zp_switched_on() )
+        return;
+
     self thread zp_player_think();
 }
 
 function zp_on_spawned()
 {
+    if ( !zp_origin_allowed() || !zp_switched_on() )
+        return;
+
     // zp_player_think() waits on "spawned_player" itself; the callback is
     // only here so a player who connected before the script was up still
     // gets a watcher.
@@ -238,6 +263,22 @@ function zp_init()
 
     level.zp_loaded = 1;
 
+    /*
+        Switched off. The descriptor still goes up, because "not here" and
+        "here, and off" are different answers to a mod asking whether it
+        can hand ZPause a pause.
+    */
+    if ( !level.zp.enabled )
+    {
+        // Read by the player callbacks, which the system manager registered
+        // before any of this ran and which are not behind this gate.
+        level.zp_off = 1;
+        zp_api_register( 0 );
+        return;
+    }
+
+    level.zp_off = undefined;
+
     level.zp_paused = 0;
     level.zp_busy = 0;
     level.zp_last_toggle = 0;
@@ -245,6 +286,7 @@ function zp_init()
     level.zp_pause_count = 0;
     level.zp_pending = 0;
     level.zp_pending_by = undefined;
+    level.zp_menu_sync_held = undefined;
     level.zp_spawn_flag_was_set = 0;
     level.zp_held_vars = [];
     level.zp_pauser_name = "someone";
@@ -282,9 +324,23 @@ function zp_init()
 
     level thread zp_endgame_safety();
     level thread zp_round_watcher();
+    level thread zp_personal_watcher();
+    level thread zp_menu_sync_watcher();
     level thread zp_config_watcher();
     level thread zp_config_printer();
+    /*
+        Made here, not read into existence: the console can only assign to a
+        dvar that already exists, so "Unknown cmd zp_hud_debug" is what a
+        switch nobody created looks like from in the game.
+    */
+    if ( getdvarstring( "zp_hud_debug" ) == "" )
+        setdvar( "zp_hud_debug", "0" );
+
     level thread zp_build_watermark();
+    level thread zp_ui_publisher();
+
+    // Last, so the first thing that reads it finds a mod already up.
+    zp_api_register( 1 );
 }
 
 
@@ -344,6 +400,21 @@ function zp_load_config()
     if ( !isdefined( level.zp ) )
         level.zp = spawnstruct();
 
+    // --- general ---------------------------------------------------
+
+    /*
+        ZPause itself. On by default. Off, the script still loads, still
+        says so on level.zmods -- with enabled 0 -- and installs nothing
+        else: no threads, no HUD, no chat words, no button watcher and nothing
+        precached. The match runs as it would with the file gone.
+
+        Read once, as the match loads. Taking a pause that is already
+        installed back out safely is not something a switch can do in the
+        middle of a game, so this one lands on the next match, which is
+        what a bundle's MODS page says about it.
+    */
+    level.zp.enabled = zp_cfg_int( "zp_enabled", 1 );
+
     // --- debug -----------------------------------------------------
     /*
         Which copy of the script runs when more than one is installed --
@@ -373,6 +444,37 @@ function zp_load_config()
         nobody is really the host, and it falls to whoever holds it.
     */
     level.zp.host_only = zp_cfg_int( "zp_host_only", 0 );
+
+    /*
+        A personal pause. Off by default. With it on, the pause input holds
+        only the player who pressed it -- frozen, protected, and ignored by
+        the zombies -- while everybody else plays on. The whole game pauses
+        by itself once nobody is left playing: everybody else paused too,
+        or down. The first one back brings it back. See zp_personal_start().
+
+        Personal to each player, so it never goes to a vote, the host's
+        approval or the ready check, and zp_host_only does not stop it:
+        what that setting protects is a game the others are playing, which
+        a personal pause does not touch. It does spend one of the match's
+        zp_max_pauses, and zp_max_pause_time ends it, the same as a pause.
+    */
+    level.zp.personal_pause = zp_cfg_int( "zp_personal_pause", 0 );
+
+    /*
+        The game's own pause menu pauses the game. Off by default. Opening
+        it is the pause input and closing it is the resume input, so it
+        answers to everything else here -- zp_host_only, a vote, the host's
+        approval, the cooldown, zp_max_pauses -- exactly as the combo does,
+        and with zp_personal_pause on it takes that player out of the game
+        on their own.
+
+        Every route but the t7-compiler's: the menu is heard through Lua,
+        and an injected script reaches a stock client that loads none. Each
+        player's own game reports their own menu, so a player without
+        ZPause opening theirs pauses nothing. See
+        lui/ui/zpause/zpausepausemenu.lua.
+    */
+    level.zp.pause_menu = zp_cfg_str( "zp_pause_menu", "off" );
 
     /*
         The host's settings menu, opened while paused by holding fire and
@@ -807,7 +909,15 @@ function zp_word_is( msg, token )
     if ( msg == token )
         return 1;
 
-    if ( msg.size > 1 && getsubstr( msg, 1 ) == token )
+    /*
+        Only when that first character is not one a word is made of. It
+        used to be dropped from anything: with a vote open "my" and "by"
+        cast a yes, "on", "in", "an" and "un" cast a no, and "eyes" was a
+        yes. A control character or a prefix is what this is for.
+    */
+    if ( msg.size > 1
+         && !issubstr( "abcdefghijklmnopqrstuvwxyz0123456789", getsubstr( msg, 0, 1 ) )
+         && getsubstr( msg, 1 ) == token )
         return 1;
 
     return 0;
@@ -1310,6 +1420,44 @@ function zp_disconnect_watcher()
     // Read fresh: this waits for the whole match before it decides.
     zp_load_config();
 
+    /*
+        Somebody who paused by opening their menu and then left is not
+        going to close it again, so the game is handed back for them.
+    */
+    /*
+        A player who leaves is out of the room's menus whether or not
+        theirs is what paused the game.
+    */
+    if ( zp_menu_synced() && zp_true( self.zp_in_pause_menu ) )
+    {
+        self.zp_in_pause_menu = undefined;
+        self.zp_menu_seen = undefined;
+        self.zp_menu_paused = undefined;
+        zp_menu_sync_apply();
+        return;
+    }
+
+    if ( zp_true( self.zp_menu_paused ) )
+    {
+        self.zp_menu_paused = undefined;
+        self.zp_in_pause_menu = undefined;
+
+        if ( zp_true( level.zp_paused ) && !zp_true( level.zp_busy ) )
+        {
+            level.zp_last_toggle = gettime();
+            level thread zp_do_unpause( undefined, "a closed menu" );
+        }
+    }
+
+    /*
+        One fewer player is one fewer ready press needed, and the tally
+        is only ever recounted by somebody pressing ready. Everybody left
+        having already pressed it meant the count could never be taken
+        again and the game stayed paused for good.
+    */
+    if ( zp_true( level.zp_paused ) && level.zp.ready_check )
+        level thread zp_mark_ready( undefined );
+
     if ( !level.zp.pause_on_disconnect )
         return;
 
@@ -1471,7 +1619,9 @@ function zp_mark_ready( player )
 
 function zp_request_toggle( player )
 {
-    if ( zp_true( level.zp_paused ) )
+    // A player in a personal pause is always asking to come back, whatever
+    // the rest of the game is doing.
+    if ( zp_true( level.zp_paused ) || ( isdefined( player ) && zp_true( player.zp_personal ) ) )
         zp_request_unpause( player );
     else
         zp_request_pause( player );
@@ -1484,6 +1634,14 @@ function zp_request_pause( player )
         effect on the next attempt rather than the one after it.
     */
     zp_load_config();
+
+    // Ahead of zp_host_only and the vote: a personal pause holds nobody
+    // but the player asking for it.
+    if ( level.zp.personal_pause && isdefined( player ) )
+    {
+        zp_personal_start( player );
+        return;
+    }
 
     if ( zp_host_blocked( player ) )
         return;
@@ -1509,9 +1667,24 @@ function zp_request_pause( player )
     /*
         A second ask calls off a pause that is waiting for the round to end,
         so the same input both sets it and takes it back.
+
+        Whoever armed it, or the host. It sits ahead of the vote and the
+        host-approval gates, so anybody being allowed to cancel meant one
+        player quietly undoing what the room had just voted for.
+
+        The name in the refusal goes over as the player: zp_text_player()
+        and the localized zp_loc_player() both fall back to "someone" for
+        an armer who has since left.
     */
     if ( zp_true( level.zp_pending ) )
     {
+        if ( isdefined( player ) && isdefined( level.zp_pending_by )
+             && player != level.zp_pending_by && !zp_player_is_host( player ) )
+        {
+            player zp_say( "MSG_ROUND_END_NOT_YOURS", level.zp_pending_by );
+            return;
+        }
+
         level.zp_pending = 0;
         level.zp_pending_by = undefined;
         zp_say_all( "MSG_ROUND_END_OFF" );
@@ -1559,6 +1732,30 @@ function zp_request_unpause( player )
         effect on the next attempt rather than the one after it.
     */
     zp_load_config();
+
+    /*
+        Coming back from a personal pause answers to nobody, and it is read
+        whether or not zp_personal_pause is still on, so turning it off
+        cannot leave somebody held with no way out.
+
+        While the whole game is held because nobody was left playing, it is
+        the players who paused who bring it back -- zp_personal_watcher()
+        resumes it the moment one of them returns. Anybody else pressing
+        resume is told as much rather than ignored.
+    */
+    if ( isdefined( player ) && zp_true( player.zp_personal ) )
+    {
+        zp_personal_resume( player );
+        return;
+    }
+
+    if ( zp_true( level.zp_personal_hold ) )
+    {
+        if ( isdefined( player ) )
+            player zp_say( "MSG_PERSONAL_WAITING" );
+
+        return;
+    }
 
     if ( zp_host_blocked( player ) )
         return;
@@ -1665,7 +1862,7 @@ function zp_ease_release()
     setslowmotion( zp_ease_scale(), 1, level.zp.ease_time );
 }
 
-function zp_do_pause( player )
+function zp_do_pause( player, name )
 {
     // Pick up any dvar the host changed since the last pause, so config
     // edits do not need a map restart.
@@ -1676,9 +1873,22 @@ function zp_do_pause( player )
     level.zp_pause_start = gettime();
     level.zp_held_vars = [];
 
+    /*
+        name is who to credit when nobody pressed anything -- the personal
+        pauses holding the whole game give "the team". A name cannot go
+        through the text table the way a player does -- the Workshop build
+        hands a player over for each client to name in its own language --
+        so the team has lines of its own, and zp_pauser_team picks them.
+    */
     level.zp_pauser_name = "someone";
+    level.zp_pauser_team = undefined;
     if ( isdefined( player ) && isdefined( player.name ) )
         level.zp_pauser_name = player.name;
+    else if ( isdefined( name ) )
+    {
+        level.zp_pauser_name = name;
+        level.zp_pauser_team = 1;
+    }
     level.zp_pauser = player;
 
     /*
@@ -1745,12 +1955,32 @@ function zp_do_pause( player )
     if ( level.zp.freeze_bleedout )
         level thread zp_bleedout_enforcer();
 
-    // 6. Tell everybody.
-    level thread zp_hud_show();
-    zp_say_all( "MSG_PAUSED_BY", level.zp_pauser );
+    /*
+        6. Tell everybody -- unless this is zp_vote_hold's provisional
+        pause, where the vote HUD is the one on screen. zp_vote_start()
+        takes the pause HUD down for that reason, and putting it straight
+        back left the banner naming the resume combo while that same
+        combo was a yes vote. zp_vote_finish() gives it back if the vote
+        carries.
+    */
+    if ( !zp_true( level.zp_vote_provisional ) )
+        level thread zp_hud_show();
+
+    if ( zp_true( level.zp_pauser_team ) )
+        zp_say_all( "MSG_PAUSED_BY_TEAM" );
+    else
+        zp_say_all( "MSG_PAUSED_BY", level.zp_pauser );
+
     level thread zp_sound_all( level.zp.pause_sound );
 
-    if ( level.zp.max_pause_time > 0 )
+    /*
+        Not for the whole-game hold the personal pauses make: each of
+        those has zp_max_pause_time running on its own, and the first to
+        run out brings a player back and the game with them. Timing this
+        one as well resumed a game with everybody still away, which the
+        watcher paused again straight away, over and over.
+    */
+    if ( level.zp.max_pause_time > 0 && !zp_true( level.zp_personal_hold ) )
         level thread zp_auto_unpause();
 
     // Everything is held now, so normal time is invisible from here.
@@ -1768,6 +1998,17 @@ function zp_do_unpause( player, label )
 {
     level endon( "end_game" );
 
+    /*
+        Nothing resumes a game that is already running. The auto-resume
+        and a vote that passes can both arrive after the game came back
+        -- a resume vote still open when zp_max_pause_time expires is the
+        way in -- and without this the second one runs the whole thing
+        again in live play: the chat line, the countdown with everybody
+        held, and the timescale dropping and ramping back.
+    */
+    if ( !zp_true( level.zp_paused ) )
+        return;
+
     level.zp_busy = 1;
 
     if ( isdefined( player ) && isdefined( player.name ) )
@@ -1776,6 +2017,10 @@ function zp_do_unpause( player, label )
         zp_say_all( "MSG_RESUMING_READY" );
     else if ( isdefined( label ) && label == "vote failed" )
         zp_say_all( "MSG_RESUMING_VOTE_FAILED" );
+    else if ( isdefined( label ) && label == "nobody left away" )
+        zp_say_all( "MSG_RESUMING_NOBODY_AWAY" );
+    else if ( isdefined( label ) && label == "a closed menu" )
+        zp_say_all( "MSG_RESUMING_MENU_CLOSED" );
     else if ( !isdefined( player ) )
         zp_say_all( "MSG_RESUMING_AUTO" );
     else
@@ -1784,6 +2029,18 @@ function zp_do_unpause( player, label )
     // Countdown. Everything stays frozen for the whole countdown, so
     // nobody gets to reposition against held zombies.
     cd = level.zp.countdown;
+
+    /*
+        A pause the room's menus were holding ends the moment the last one
+        closes: that player's own game is running again already, and a
+        countdown would hold everybody else behind a client that has gone.
+        A combo pause in the same mode still counts down, because nothing
+        about it was in step with a client to begin with.
+    */
+    if ( zp_true( level.zp_menu_sync_held ) )
+        cd = 0;
+
+    level.zp_menu_sync_held = undefined;
 
     // One line for everybody for the duration of the countdown -- the
     // per-player combo hint has nothing to say while nobody may move.
@@ -1846,6 +2103,13 @@ function zp_do_unpause( player, label )
 
     zp_hud_destroy();
 
+    // A resume vote still open when the game comes back has nothing left
+    // to decide, and leaving it open turns every pause request into a
+    // ballot on a question that has already been answered.
+    if ( zp_true( level.zp_vote_active ) )
+        zp_vote_stop();
+
+    level.zp_personal_hold = undefined;
     level.zp_paused = 0;
     level.zp_last_toggle = gettime();
     level.zp_busy = 0;
@@ -1861,6 +2125,696 @@ function zp_auto_unpause()
     wait( level.zp.max_pause_time );
 
     level thread zp_do_unpause( undefined );
+}
+
+
+/* ==================================================================
+    THE GAME'S OWN PAUSE MENU
+
+    zp_pause_menu. Opening it presses pause and closing it presses
+    resume, so everything that decides a pause decides this one too.
+
+    Black Ops III tells a script nothing about a player opening a menu, so
+    the mod's own Lua sends it: zpausepausemenu.lua wraps
+    LUI.createMenu.StartMenu_Main -- the in-game menu itself -- and calls
+    Engine.SendMenuResponse() with the menu name "zpause", which arrives
+    here as a "menuresponse" notify on that player. The game's own menus
+    talk to a running match the same way: the leave-game popup sends
+    ( "popup_leavegame", "endround" ) and the restart one sends
+    ( "restartgamepopup", "restart_level_zm" ). Nothing in the stock
+    scripts reads the menu name "zpause" or either response below --
+    _zm_gametype.gsc's handler branches on the response, and none of the
+    words it tests is one of these.
+
+    Every route but the t7-compiler's. The Workshop build carries the Lua
+    in core_mod, which loads in every mode; BOIII, Ezz BOIII and T7x load
+    it from ui_scripts, which the client runs in a match as well as in the
+    frontend. An injected script reaches a stock client that loads no Lua
+    at all, so that route has the combo and the chat commands and not this.
+
+    Each player's own game reports their own menu, so a player without
+    ZPause opening theirs pauses nothing -- and a solo game is left alone,
+    because Black Ops III pauses one by itself when that menu opens.
+   ================================================================== */
+
+function zp_pause_menu_watcher()
+{
+    self endon( "disconnect" );
+    level endon( "end_game" );
+
+    for (;;)
+    {
+        self waittill( "menuresponse", menu, response );
+
+        if ( !isdefined( menu ) || menu != "zpause" || !isdefined( response ) )
+            continue;
+
+        if ( response == "pause_menu_open" )
+            self zp_pause_menu_opened();
+        else if ( response == "pause_menu_closed" )
+            self zp_pause_menu_closed();
+        else if ( response == "pause_menu_alive" )
+            self zp_pause_menu_alive();
+        else
+            self zp_api_menu_request( response );
+    }
+}
+
+/*
+    Still open. The beat also stands in for an open the script never got:
+    a response dropped, or this build starting while a menu was already
+    on screen.
+*/
+function zp_pause_menu_alive()
+{
+    self.zp_menu_seen = gettime();
+
+    if ( !zp_true( self.zp_in_pause_menu ) )
+        self zp_pause_menu_opened();
+}
+
+function zp_pause_menu_opened()
+{
+    zp_load_config();
+
+    if ( !zp_menu_on() || zp_true( self.zp_in_pause_menu ) )
+        return;
+
+    // Who may pause at all is still zp_host_only's to say.
+    if ( zp_menu_synced() && !zp_menu_sync_allowed( self ) )
+        return;
+
+    self.zp_in_pause_menu = 1;
+
+    if ( zp_menu_synced() )
+    {
+        zp_menu_sync_apply();
+        return;
+    }
+
+    was_paused = zp_true( level.zp_paused ) || zp_true( level.zp_pending );
+    was_away = zp_true( self.zp_personal );
+
+    /*
+        The same request the combo makes, so a vote, the host's approval,
+        the cooldown and zp_max_pauses all have their say -- and with
+        zp_personal_pause on it is a personal pause, since that is what
+        the pause input is then.
+    */
+    zp_request_pause( self );
+
+    /*
+        Whether that press is what paused the game. Only then does closing
+        the menu resume it: a pause somebody else called is not this
+        player's to end by walking out of a menu.
+    */
+    if ( zp_true( self.zp_personal ) && !was_away )
+        self.zp_menu_paused = 1;
+    else if ( zp_true( level.zp_paused ) && !was_paused )
+        self.zp_menu_paused = 1;
+}
+
+function zp_pause_menu_closed()
+{
+    if ( !zp_true( self.zp_in_pause_menu ) )
+        return;
+
+    self.zp_in_pause_menu = undefined;
+    self.zp_menu_seen = undefined;
+
+    if ( zp_menu_synced() )
+    {
+        zp_menu_sync_apply();
+        return;
+    }
+
+    if ( !zp_true( self.zp_menu_paused ) )
+        return;
+
+    self.zp_menu_paused = undefined;
+
+    // The resume input, with everything that decides one: a resume vote,
+    // the ready check, the cooldown. A personal pause is simply theirs.
+    zp_request_unpause( self );
+}
+
+/* ==================================================================
+    THE ROOM'S MENUS
+
+    zp_pause_menu 2. One pause menu open anywhere pauses for everybody,
+    and the game comes back when the last one closes, so the vanilla
+    pause works in a co-op game the way it does in solo.
+
+    Mode 1 is one player's menu pressing pause the usual way, with
+    everything that decides a pause having its say. Mode 2 is a mirror of
+    what the clients are doing, and anything that can refuse or defer a
+    press is what breaks a mirror: the vote, the cooldown, zp_max_pauses,
+    zp_round_pause and the resume countdown all stand down for it, and a
+    personal pause would hold the asker rather than the room. zp_host_only
+    is the one that still has a say, because it decides who may pause at
+    all rather than how often -- a player it blocks opens their menu
+    without the room noticing.
+
+    What does not arrive is the problem. Mode 1 can live with a close it
+    never hears, since only the player who paused can resume and leaving
+    the game hands it back for them; mode 2 would hold the match for the
+    rest of its life. So the menu's own Lua beats twice a second from the
+    timer it already runs, a player whose beat has stopped is dropped, and
+    zp_menu_sync_watcher() reconciles the whole set once a second rather
+    than trusting any single message. A beat from a menu the script does
+    not have open is taken as an open it missed.
+
+    A client whose Lua predates the beat is never dropped for silence --
+    its open and close are all there is, and dropping it would be worse
+    than trusting it. On this engine that is every route without the
+    menu's Lua at all, which is the same set that has never had
+    zp_pause_menu.
+   ================================================================== */
+
+/*
+    Three named modes rather than three numbers: "off", "own" for your own
+    menu pressing pause the usual way, and "room" for the game following
+    everybody's. zp_cfg_str() reads "none" as empty on every port, and an
+    empty one is off like any other unset setting.
+*/
+function zp_menu_on()
+{
+    return level.zp.pause_menu != "" && level.zp.pause_menu != "off";
+}
+
+function zp_menu_synced()
+{
+    return level.zp.pause_menu == "room";
+}
+
+/*
+    zp_host_blocked() without the line it prints: this is asked every
+    time a menu opens, and a blocked player does not need telling twice a
+    match that they are not the host.
+*/
+function zp_menu_sync_allowed( player )
+{
+    if ( !level.zp.host_only )
+        return 1;
+
+    host = zp_host_player();
+
+    // Nobody is the host, so there is nothing to restrict to.
+    if ( !isdefined( host ) )
+        return 1;
+
+    return isdefined( player ) && player == host;
+}
+
+/*
+    Everybody with their pause menu open, in the order getplayers()
+    gives them -- the same room always writes the same line, which is one
+    configstring per set rather than one per press.
+*/
+function zp_menu_open_players()
+{
+    out = [];
+    players = getplayers();
+
+    for ( i = 0; i < players.size; i++ )
+    {
+        if ( zp_true( players[i].zp_in_pause_menu ) )
+            out[out.size] = players[i];
+    }
+
+    return out;
+}
+
+function zp_menu_sync_names()
+{
+    open = zp_menu_open_players();
+    names = "";
+
+    for ( i = 0; i < open.size; i++ )
+    {
+        if ( !isdefined( open[i].name ) )
+            continue;
+
+        if ( names != "" )
+            names = names + ", ";
+
+        names = names + open[i].name;
+    }
+
+    if ( names == "" )
+        names = "someone";
+
+    return names;
+}
+
+/*
+    The name line while the room's menus are what is holding the game.
+    HUD_PAUSED_BY is "paused by &&1" in every language the mod ships, so
+    the list goes in as its one argument and nothing new is translated.
+*/
+function zp_menu_sync_hud()
+{
+    if ( !isdefined( level.zp_hud_meta ) )
+        return;
+
+    zp_show( level.zp_hud_meta, "HUD_PAUSED_BY", zp_menu_sync_names() );
+}
+
+/*
+    Put the game where the room's menus say it should be. Called on every
+    open and close and once a second besides, so a pause that could not
+    start because the last one was still easing out is simply tried again
+    rather than lost.
+*/
+function zp_menu_sync_apply()
+{
+    if ( !zp_menu_synced() )
+        return;
+
+    open = zp_menu_open_players();
+
+    if ( open.size > 0 )
+    {
+        /*
+            Already held, and not by us: a combo, a vote, a disconnect.
+            That pause stands and is nobody else's to narrate -- the name
+            line belongs to whoever called it. If it ends while menus are
+            still open, the next pass takes the game back.
+        */
+        if ( zp_true( level.zp_paused ) )
+        {
+            if ( zp_true( level.zp_menu_sync_held ) )
+                zp_menu_sync_hud();
+
+            return;
+        }
+
+        if ( zp_true( level.zp_busy ) || zp_true( level.zp_pending ) || !zp_game_ready() )
+            return;
+
+        level.zp_menu_sync_held = 1;
+        level.zp_last_toggle = gettime();
+        level thread zp_do_pause( open[0] );
+        return;
+    }
+
+    /*
+        Only what the menus are holding is handed back when they close.
+        Every pause in the mod passes this test once a second, so without
+        it a combo pause, a vote or zp_pause_on_disconnect lasted about a
+        second while zp_pause_menu was "room" -- nobody had a menu open,
+        so the reconciler resumed a pause it had never called.
+    */
+    if ( !zp_true( level.zp_menu_sync_held ) )
+        return;
+
+    if ( !zp_true( level.zp_paused ) || zp_true( level.zp_busy ) )
+        return;
+
+    level.zp_last_toggle = gettime();
+    level thread zp_do_unpause( undefined, "the last menu closing" );
+}
+
+function zp_menu_sync_watcher()
+{
+    level endon( "end_game" );
+
+    for (;;)
+    {
+        wait 1;
+
+        if ( !zp_menu_synced() )
+            continue;
+
+        players = getplayers();
+
+        for ( i = 0; i < players.size; i++ )
+        {
+            if ( !zp_true( players[i].zp_in_pause_menu ) )
+                continue;
+
+            /*
+                Never heard a beat from this one: its menu Lua is older
+                than this build, so its open and close are all there is.
+            */
+            if ( !isdefined( players[i].zp_menu_seen ) )
+                continue;
+
+            if ( gettime() - players[i].zp_menu_seen < 4000 )
+                continue;
+
+            players[i].zp_in_pause_menu = undefined;
+            players[i].zp_menu_seen = undefined;
+            players[i].zp_menu_paused = undefined;
+        }
+
+        zp_menu_sync_apply();
+    }
+}
+
+
+/* ==================================================================
+    PERSONAL PAUSE
+
+    zp_personal_pause. One player steps out of a game that carries on
+    without them: frozen, protected, and ignored by every zombie -- the
+    same hold a pause puts on everybody, put on one. The rest play on.
+
+    The whole game pauses by itself once nobody is left playing, which is
+    everybody else paused as well, or everybody still in it down -- a team
+    that went down around somebody who had stepped away is held for them
+    rather than lost. zp_personal_watcher() decides that, and resumes it
+    the moment a player who paused comes back.
+   ================================================================== */
+
+/*
+    Whether a player is in the game right now: on their feet, not
+    spectating, and not personally paused. The whole game is held when
+    this is nobody.
+
+    .laststand and .revivetrigger are both _zm_laststand.gsc's own, set
+    as a player goes down and cleared as they get up.
+*/
+function zp_playable( p )
+{
+    if ( !isdefined( p ) || zp_true( p.zp_personal ) )
+        return 0;
+
+    if ( zp_player_is_spectating( p ) )
+        return 0;
+
+    if ( zp_true( p.laststand ) || isdefined( p.revivetrigger ) )
+        return 0;
+
+    return 1;
+}
+
+function zp_personal_start( player )
+{
+    if ( zp_true( player.zp_personal ) )
+        return;
+
+    if ( !zp_game_ready() )
+    {
+        player zp_say( "MSG_NOT_YET" );
+        return;
+    }
+
+    /*
+        Not from the floor. Down, the pause would hold the bleedout while
+        the team fought on -- a way to never bleed out rather than a way to
+        step away. A team that is all down is held anyway, by the watcher.
+    */
+    if ( !zp_playable( player ) )
+    {
+        player zp_say( "MSG_PERSONAL_DOWN" );
+        return;
+    }
+
+    if ( zp_pauses_spent() )
+    {
+        player zp_say( "MSG_NO_PAUSES_LEFT" );
+        return;
+    }
+
+    // One press, one pause: the combo is still held on the next frame.
+    if ( isdefined( player.zp_personal_last ) && gettime() - player.zp_personal_last < 1000 )
+        return;
+
+    player.zp_personal_last = gettime();
+    level.zp_pause_count = level.zp_pause_count + 1;
+
+    // Ends a countdown back in that is still running: they are staying.
+    player notify( "zp_personal_on" );
+    player zp_personal_hud_off();
+
+    player.zp_personal = 1;
+    player zp_freeze_player();
+    player thread zp_personal_enforcer();
+
+    // Under a whole-game pause the pause banner is the one on screen;
+    // zp_personal_watcher() puts this back when it ends.
+    if ( !zp_true( level.zp_paused ) )
+        player zp_personal_hud_on();
+
+    if ( level.zp.max_pause_time > 0 )
+        player thread zp_personal_timeout();
+
+    if ( level.zp.pause_sound != "" )
+        player playlocalsound( level.zp.pause_sound );
+
+    zp_say_all( "MSG_PERSONAL_AWAY", player );
+}
+
+/*
+    Back from a personal pause. With the game running, they are counted
+    in on their own, the same countdown a pause gives everybody. With the
+    whole game held, they simply stop being away -- and that is what the
+    watcher is waiting for, so the game comes back with them.
+
+    why is a text key, told to them alone.
+*/
+function zp_personal_resume( player, why )
+{
+    if ( !zp_true( player.zp_personal ) )
+        return;
+
+    player.zp_personal_last = gettime();
+    player notify( "zp_personal_off" );
+    player.zp_personal = undefined;
+    player zp_personal_hud_off();
+
+    if ( isdefined( why ) )
+        player zp_say( why );
+
+    if ( zp_true( level.zp_paused ) )
+    {
+        level.zp_personal_back = player;
+        return;
+    }
+
+    zp_say_all( "MSG_PERSONAL_BACK", player );
+    player thread zp_personal_countdown();
+}
+
+/*
+    The count back in, drawn where their banner was. This file has no
+    bold print to reach for, and a HUD element takes the same keyed line
+    the whole-game countdown draws, so it reads in the player's own
+    language on the Workshop build as well.
+*/
+function zp_personal_countdown()
+{
+    self endon( "disconnect" );
+    self endon( "zp_personal_on" );
+    level endon( "end_game" );
+
+    count = self zp_personal_text( "objective", 2.5, -20 );
+    count.color = ( 0.35, 1, 0.35 );
+    self.zp_personal_count = count;
+
+    for ( i = level.zp.countdown; i > 0; i-- )
+    {
+        // A whole-game pause that began during the count owns them now,
+        // and lets them go with everybody else.
+        if ( zp_true( level.zp_paused ) )
+            break;
+
+        zp_show( count, "HUD_RESUMING_IN", i );
+
+        if ( level.zp.countdown_sound != "" )
+            self playlocalsound( level.zp.countdown_sound );
+
+        wait 1;
+    }
+
+    self zp_personal_hud_off();
+
+    if ( zp_true( level.zp_paused ) || zp_true( self.zp_personal ) )
+        return;
+
+    if ( level.zp.resume_sound != "" )
+        self playlocalsound( level.zp.resume_sound );
+
+    self zp_unfreeze_player();
+}
+
+/*
+    zp_player_enforcer() for one player, for as long as their pause lasts:
+    it runs only while the whole game is paused, and a map script that
+    lets go of a player mid-pause would otherwise let go of this one too.
+*/
+function zp_personal_enforcer()
+{
+    self endon( "disconnect" );
+    self endon( "zp_personal_off" );
+    level endon( "end_game" );
+
+    for (;;)
+    {
+        self zp_hold_controls();
+        self.ignoreme = 1;
+
+        if ( level.zp.godmode )
+            self zp_invulnerable();
+
+        wait 0.1;
+    }
+}
+
+function zp_personal_timeout()
+{
+    self endon( "disconnect" );
+    self endon( "zp_personal_off" );
+    level endon( "end_game" );
+
+    wait( level.zp.max_pause_time );
+
+    zp_personal_resume( self, "MSG_PERSONAL_TIME_UP" );
+}
+
+/*
+    What a personally paused player sees, over their own blackout: that
+    they are paused and how to come back.
+
+    Bare client elements, the way the settings menu's are, with no parent.
+    hud::createFontString() parents its element to level.uiparent, and one
+    still up when its player leaves keeps that slot for good; an element
+    with no parent goes with the player. Both lines are fixed strings,
+    which keeps them to a handful of configstrings however many players
+    use them.
+*/
+function zp_personal_hud_on()
+{
+    self zp_personal_hud_off();
+
+    title = self zp_personal_text( "objective", 2.5, -20 );
+    title.color = ( 1, 0.82, 0.15 );
+    zp_show( title, "HUD_PERSONAL_TITLE" );
+    self.zp_personal_title = title;
+
+    hint = self zp_personal_text( "default", 1.25, 12 );
+
+    if ( level.zp.button_combo && level.zp.combo != "" )
+        zp_show( hint, "HUD_PERSONAL_BACK_CHAT_OR", level.zp.combo );
+    else
+        zp_show( hint, "HUD_PERSONAL_TYPE_UNPAUSE" );
+
+    self.zp_personal_hint = hint;
+}
+
+function zp_personal_text( font, scale, y )
+{
+    e = newclienthudelem( self );
+    e.font = font;
+    e.fontscale = scale;
+    e.alignx = "center";
+    e.aligny = "middle";
+    e.horzalign = "center";
+    e.vertalign = "middle";
+    e.x = 0;
+    e.y = y;
+    e.hidewheninmenu = 1;
+    e.color = ( 0.85, 0.85, 0.85 );
+    zp_hud_style( e, 1 );
+
+    return e;
+}
+
+function zp_personal_hud_off()
+{
+    zp_hud_free( self.zp_personal_title );
+    zp_hud_free( self.zp_personal_hint );
+    zp_hud_free( self.zp_personal_count );
+
+    self.zp_personal_title = undefined;
+    self.zp_personal_hint = undefined;
+    self.zp_personal_count = undefined;
+}
+
+/*
+    The whole game, held while nobody is left playing and let go the
+    moment somebody is. Runs all match; it only ever acts on a pause it
+    made itself, which zp_personal_hold marks, so a player dropping or
+    anything else that pauses the game is left to end the usual way.
+*/
+function zp_personal_watcher()
+{
+    level endon( "end_game" );
+
+    for (;;)
+    {
+        wait 0.25;
+
+        players = getplayers();
+
+        /*
+            A personally paused player's own banner stands down while the
+            whole game is paused -- the pause banner sits in the same
+            place and says the same thing -- and comes back after. Only on
+            a change, so nothing is made or destroyed on a tick.
+        */
+        for ( i = 0; i < players.size; i++ )
+        {
+            p = players[i];
+
+            if ( !isdefined( p ) )
+                continue;
+
+            show = zp_true( p.zp_personal ) && !zp_true( level.zp_paused );
+
+            if ( show && !isdefined( p.zp_personal_title ) )
+                p zp_personal_hud_on();
+            else if ( !show && isdefined( p.zp_personal_title ) )
+                p zp_personal_hud_off();
+        }
+
+        if ( zp_true( level.zp_busy ) )
+            continue;
+
+        away = 0;
+        playing = 0;
+
+        for ( i = 0; i < players.size; i++ )
+        {
+            if ( !isdefined( players[i] ) )
+                continue;
+
+            if ( zp_true( players[i].zp_personal ) )
+                away++;
+            else if ( zp_playable( players[i] ) )
+                playing++;
+        }
+
+        if ( !zp_true( level.zp_paused ) )
+        {
+            if ( away > 0 && playing == 0 && zp_game_ready() )
+            {
+                // Whoever came back during some other pause is not who
+                // ends this one.
+                level.zp_personal_back = undefined;
+                level.zp_personal_hold = 1;
+                level.zp_last_toggle = gettime();
+                zp_say_all( "MSG_PERSONAL_HOLD" );
+                level thread zp_do_pause( undefined, "the team" );
+            }
+
+            continue;
+        }
+
+        if ( zp_true( level.zp_personal_hold ) && ( playing > 0 || away == 0 ) )
+        {
+            back = level.zp_personal_back;
+            level.zp_personal_back = undefined;
+            level.zp_personal_hold = undefined;
+            level.zp_last_toggle = gettime();
+
+            if ( isdefined( back ) )
+                level thread zp_do_unpause( back );
+            else
+                level thread zp_do_unpause( undefined, "nobody left away" );
+        }
+    }
 }
 
 
@@ -2135,6 +3089,7 @@ function zp_player_think()
     self.zp_thinking = 1;
     self thread zp_disconnect_watcher();
     self thread zp_button_watcher();
+    self thread zp_pause_menu_watcher();
     self thread zp_vote_no_watcher();
     self thread zp_input_debug_watcher();
     self thread zp_menu_watcher();
@@ -2167,6 +3122,14 @@ function zp_hint()
 
     if ( !level.zp.button_combo )
         return;
+
+    // A personal pause never goes to a vote, so the vote line has nothing
+    // to add to this one.
+    if ( level.zp.personal_pause )
+    {
+        self zp_say( "MSG_JOIN_HINT_PERSONAL", level.zp.combo );
+        return;
+    }
 
     self zp_say( "MSG_JOIN_HINT", level.zp.combo );
 
@@ -2207,7 +3170,13 @@ function zp_freeze_player()
 */
 function zp_hold_controls()
 {
-    if ( level.zp.freeze_players || zp_true( level.zp_counting_down ) || zp_true( self.zp_menu_open ) )
+    /*
+        A personal pause is always locked, whatever zp_freeze_players says:
+        roaming a game that is still running, protected and ignored by
+        every zombie, is a way to walk through a round rather than a pause.
+    */
+    if ( level.zp.freeze_players || zp_true( level.zp_counting_down ) || zp_true( self.zp_menu_open )
+         || zp_true( self.zp_personal ) )
     {
         self freezecontrols( 1 );
         self.zp_locked = 1;
@@ -2249,6 +3218,12 @@ function zp_hold_everyone()
 function zp_unfreeze_player()
 {
     if ( !zp_true( self.zp_frozen ) )
+        return;
+
+    // A whole-game resume thaws everybody, and somebody still in a personal
+    // pause is not coming back with them. zp_personal_resume() clears the
+    // flag before it lets them go.
+    if ( zp_true( self.zp_personal ) )
         return;
 
     self.zp_frozen = undefined;
@@ -2715,8 +3690,22 @@ function zp_hud_style( elem, alpha )
         elem.glowalpha = 0.55;
     }
 
-    elem.alpha = 0;
-    elem fadeovertime( 0.25 );
+    /*
+        Set, not faded in.
+
+        fadeovertime() animates on the game's own clock, and a pause is the
+        one moment that clock is not running: zp_ease_in() has already taken
+        the world down to a quarter speed before any of this is drawn, and
+        the freeze holds it there. A quarter-second fade then arrives late,
+        or not at all -- the element exists, carries its text and is alive a
+        frame later, and draws at the alpha the fade got to, which is near
+        enough to nothing.
+
+        That is what the zp_hud_debug trace showed on T6 on 1 October 2026:
+        banner, clock, name and hint all created, written and still there a
+        frame later, with only the banner on screen. T5 and T4 set alpha
+        outright and have never had it.
+    */
     elem.alpha = alpha;
 }
 
@@ -2791,8 +3780,9 @@ function zp_panel_show( position, height )
     level.zp_panel.sort = 999;
     level.zp_panel.foreground = 1;
     level.zp_panel.zp_h = height;
-    level.zp_panel.alpha = 0;
-    level.zp_panel fadeovertime( 0.25 );
+    // Set rather than faded, for the reason zp_hud_style() gives: the world
+    // is already slowing when this is drawn, and a fade on its clock does
+    // not finish.
     level.zp_panel.alpha = level.zp.hud_panel_alpha;
 }
 
@@ -2921,6 +3911,22 @@ function zp_clock_text_updater()
     }
 }
 
+/*
+    The pause HUD, a line at a time and each on its own thread.
+
+    One thread for all of it was fine while ZPause was the only mod drawing
+    on screen. It is not fine beside three others: these elements come out
+    of pools the whole server shares -- hudelems, the parent script
+    variables hud:: keeps its bookkeeping in, and the 488 configstrings a
+    distinct settext() costs -- and a game that has run dry does not hand
+    back an element, it stops the thread asking for one. Everything after
+    that line then never ran, which is how a pause banner came to stand
+    there with no clock, no name and no hint under it.
+
+    A line of its own means one that cannot be made costs that line and
+    nothing else. zp_hud_missing() says so once, in a dvar, because println
+    is a devblock call on this engine and there is nowhere else to say it.
+*/
 function zp_hud_show()
 {
     if ( !level.zp.hud )
@@ -2928,62 +3934,12 @@ function zp_hud_show()
 
     zp_hud_destroy();
 
-    level.zp_hud = hud::createServerFontString( "objective", 1.9 );
-    zp_hud_place( level.zp_hud, level.zp.hud_position, 0 );
-    level.zp_hud.color = ( 1, 0.82, 0.15 );
-    zp_hud_style( level.zp_hud, 1 );
-    zp_show( level.zp_hud, "HUD_GAME_PAUSED" );
+    level thread zp_hud_banner_show();
 
     if ( level.zp.hud_timer )
     {
-        /*
-            The clock is a timer element, not text. settext() registers
-            every distinct string as a configstring, and a clock rewritten
-            once a second exhausts the pool and drops the whole server with
-            "G_FindConfigstringIndex: overflow". A timer element is handed
-            its value once and counts on the client for free.
-        */
-        elapsed = int( ( gettime() - level.zp_pause_start ) / 1000 );
-
-        /*
-            Two different elements, because this engine only counts down.
-
-            settimer() is what T6 uses and it works the same way here, so
-            an auto-resume gets a real timer element ticking towards zero.
-            Counting elapsed time UP has no equivalent -- T6 reaches for
-            settenthstimerup(), which Black Ops III does not have -- so
-            without an auto-resume the clock is drawn as text instead, in
-            minutes, refreshed on a tick.
-
-            Minutes rather than mm:ss for the reason T5 and T4 report in
-            minutes: every distinct string handed to settext() costs a
-            configstring out of 488, and a live second counter burns one a
-            second until the pool runs dry and drops the server. Minutes
-            bound the whole set to about sixty strings, all reused.
-        */
-        if ( level.zp.max_pause_time > 0 )
-            level.zp_hud_clock = hud::createServerTimer( "objective", 1.3 );
-        else
-            level.zp_hud_clock = hud::createServerFontString( "objective", 1.3 );
-        zp_hud_place( level.zp_hud_clock, level.zp.hud_position, zp_pause_yoff( "clock" ) );
-        level.zp_hud_clock.color = ( 0.85, 0.85, 0.85 );
-        zp_hud_style( level.zp_hud_clock, 0.85 );
-
-        if ( level.zp.max_pause_time > 0 )
-            level.zp_hud_clock settimer( level.zp.max_pause_time - elapsed );
-        else
-            zp_elapsed_show( level.zp_hud_clock );
-
-        level.zp_hud_meta = hud::createServerFontString( "default", 1.0 );
-        zp_hud_place( level.zp_hud_meta, level.zp.hud_position, zp_pause_yoff( "name" ) );
-        level.zp_hud_meta.color = ( 0.7, 0.7, 0.7 );
-        zp_hud_style( level.zp_hud_meta, 0.7 );
-
-        // One string per person who has ever paused, rather than one a second.
-        zp_show( level.zp_hud_meta, "HUD_PAUSED_BY", level.zp_pauser );
-
-        if ( level.zp.max_pause_time <= 0 )
-            level thread zp_clock_text_updater();
+        level thread zp_hud_clock_show();
+        level thread zp_hud_meta_show();
     }
 
     // The result of a vote stands in its own slot; only pull it early if
@@ -2993,6 +3949,91 @@ function zp_hud_show()
 
     level thread zp_hud_sub_updater();
 }
+
+function zp_hud_banner_show()
+{
+    level.zp_hud = hud::createServerFontString( "objective", 1.9 );
+
+    if ( !isdefined( level.zp_hud ) )
+    {
+        zp_hud_missing( "banner" );
+        return;
+    }
+
+    zp_hud_place( level.zp_hud, level.zp.hud_position, 0 );
+    level.zp_hud.color = ( 1, 0.82, 0.15 );
+    zp_hud_style( level.zp_hud, 1 );
+    zp_show( level.zp_hud, "HUD_GAME_PAUSED" );
+}
+
+/*
+    The clock is a timer element where it counts down, and text where it
+    does not, because this engine only counts down.
+
+    settimer() is what T6 uses and it works the same way here, so an
+    auto-resume gets a real timer element ticking towards zero. Counting
+    elapsed time UP has no equivalent -- T6 reaches for settenthstimerup(),
+    which Black Ops III does not have -- so without an auto-resume the clock
+    is drawn as text instead, in minutes, refreshed on a tick.
+
+    Minutes rather than mm:ss for the reason T5 and T4 report in minutes:
+    every distinct string handed to settext() costs a configstring out of
+    488, and a live second counter burns one a second until the pool runs
+    dry and drops the server. Minutes bound the whole set to about sixty
+    strings, all reused.
+*/
+function zp_hud_clock_show()
+{
+    if ( level.zp.max_pause_time > 0 )
+        level.zp_hud_clock = hud::createServerTimer( "objective", 1.3 );
+    else
+        level.zp_hud_clock = hud::createServerFontString( "objective", 1.3 );
+
+    if ( !isdefined( level.zp_hud_clock ) )
+    {
+        zp_hud_missing( "clock" );
+        return;
+    }
+
+    elapsed = int( ( gettime() - level.zp_pause_start ) / 1000 );
+
+    zp_hud_place( level.zp_hud_clock, level.zp.hud_position, zp_pause_yoff( "clock" ) );
+    level.zp_hud_clock.color = ( 0.85, 0.85, 0.85 );
+    zp_hud_style( level.zp_hud_clock, 0.85 );
+
+    if ( level.zp.max_pause_time > 0 )
+    {
+        level.zp_hud_clock settimer( level.zp.max_pause_time - elapsed );
+        return;
+    }
+
+    zp_elapsed_show( level.zp_hud_clock );
+    level thread zp_clock_text_updater();
+}
+
+function zp_hud_meta_show()
+{
+    level.zp_hud_meta = hud::createServerFontString( "default", 1.0 );
+
+    if ( !isdefined( level.zp_hud_meta ) )
+    {
+        zp_hud_missing( "name line" );
+        return;
+    }
+
+    zp_hud_place( level.zp_hud_meta, level.zp.hud_position, zp_pause_yoff( "name" ) );
+    level.zp_hud_meta.color = ( 0.7, 0.7, 0.7 );
+    zp_hud_style( level.zp_hud_meta, 0.7 );
+
+    // One string per person who has ever paused, rather than one a second.
+    if ( zp_menu_synced() )
+        zp_menu_sync_hud();
+    else if ( zp_true( level.zp_pauser_team ) )
+        zp_show( level.zp_hud_meta, "HUD_PAUSED_BY_TEAM" );
+    else
+        zp_show( level.zp_hud_meta, "HUD_PAUSED_BY", level.zp_pauser );
+}
+
 
 
 
@@ -3006,6 +4047,15 @@ function zp_hud_show()
 function zp_subline_create( position, yoff, scale, alpha )
 {
     e = self hud::createFontString( "default", scale );
+
+    // A client element the engine would not make is undefined, and styling
+    // one is what stops the thread that was drawing the rest.
+    if ( !isdefined( e ) )
+    {
+        zp_hud_missing( "hint line" );
+        return undefined;
+    }
+
     zp_hud_place( e, position, yoff );
     e.color = ( 0.85, 0.85, 0.85 );
     zp_hud_style( e, alpha );
@@ -3196,6 +4246,13 @@ function zp_hud_sub_destroy()
 
 function zp_hud_destroy()
 {
+    // The clock text thread reads level.zp_hud_clock, which is about to
+    // go. It declared this endon and nothing ever raised it, so every
+    // vote that took the HUD down and gave it back left the old thread
+    // running against the new element until its next tick. T5 and T4
+    // raise it in the same place.
+    level notify( "zp_hud_stop" );
+
     if ( isdefined( level.zp_hud ) )
     {
         zp_hud_free( level.zp_hud );
@@ -3276,6 +4333,8 @@ function zp_text( key, a, b )
         return "^1[Pause]^7 not available yet";
     if ( key == "MSG_ROUND_END_OFF" )
         return "^3[Pause]^7 the pause at the end of the round is off";
+    if ( key == "MSG_ROUND_END_NOT_YOURS" )
+        return "^1[Pause]^7 only ^3" + zp_text_player( a ) + "^7 or the host can call that off";
     if ( key == "MSG_NO_PAUSES_LEFT" )
         return "^1[Pause]^7 no pauses left this match";
     if ( key == "MSG_VOTE_COOLDOWN" )
@@ -3316,6 +4375,26 @@ function zp_text( key, a, b )
         return "^3[Pause]^7 ^2" + zp_combo_label( a ) + "^7 = yes";
     if ( key == "MSG_VOTE_HINT_YES_NO" )
         return "^3[Pause]^7 ^2" + zp_combo_label( a ) + "^7 = yes     ^1" + zp_combo_label( b ) + "^7 = no";
+    if ( key == "MSG_JOIN_HINT_PERSONAL" )
+        return "^3[Pause]^7 hold ^3" + zp_combo_label( a ) + "^7 to pause yourself -- the game stops once everybody has";
+    if ( key == "MSG_PERSONAL_DOWN" )
+        return "^1[Pause]^7 not while you are down";
+    if ( key == "MSG_PERSONAL_AWAY" )
+        return "^3[Pause]^7 ^3" + zp_text_player( a ) + "^7 has stepped away -- zombies will leave them be";
+    if ( key == "MSG_PERSONAL_BACK" )
+        return "^2[Pause]^7 ^2" + zp_text_player( a ) + "^7 is back";
+    if ( key == "MSG_PERSONAL_TIME_UP" )
+        return "^3[Pause]^7 time's up -- you're back in";
+    if ( key == "MSG_PERSONAL_WAITING" )
+        return "^3[Pause]^7 the game comes back when somebody who paused does";
+    if ( key == "MSG_PERSONAL_HOLD" )
+        return "^3[Pause]^7 nobody is left playing -- the game waits for whoever comes back first";
+    if ( key == "MSG_PAUSED_BY_TEAM" )
+        return "^3[Pause]^7 game paused by ^3the team";
+    if ( key == "MSG_RESUMING_NOBODY_AWAY" )
+        return "^2[Pause]^7 resuming -- requested by ^2nobody left away";
+    if ( key == "MSG_RESUMING_MENU_CLOSED" )
+        return "^2[Pause]^7 resuming -- requested by ^2a closed menu";
     if ( key == "HUD_GAME_PAUSED" )
         return "GAME PAUSED";
     if ( key == "HUD_RESUMING_IN" )
@@ -3336,6 +4415,14 @@ function zp_text( key, a, b )
         return "READY  " + a + " / " + b;
     if ( key == "HUD_TYPE_UNPAUSE" )
         return "type !unpause to resume";
+    if ( key == "HUD_PAUSED_BY_TEAM" )
+        return "paused by the team";
+    if ( key == "HUD_PERSONAL_TITLE" )
+        return "YOU ARE PAUSED";
+    if ( key == "HUD_PERSONAL_BACK_CHAT_OR" )
+        return "!unpause  or  " + zp_combo_label( a, level.zp.hud_binds ) + "  to come back";
+    if ( key == "HUD_PERSONAL_TYPE_UNPAUSE" )
+        return "type !unpause to come back";
     if ( key == "HUD_RESUME_CHAT_OR" )
         return "!unpause  or  " + zp_combo_label( a, level.zp.hud_binds );
     if ( key == "HUD_DOWN_VOTE_CHAT" )
@@ -3658,7 +4745,15 @@ function zp_vote_start( player, kind )
         }
     }
 
-    if ( level.zp.vote_hold && kind == "pause" && !zp_true( level.zp_paused ) )
+    /*
+        Not with zp_round_pause: holding the game the moment the vote
+        opens is the one thing that setting exists to prevent, and the
+        pause the vote is asking for is meant to land at the round
+        boundary. The vote runs without the hold and arms it on the way
+        out, the same as a pause nobody voted on.
+    */
+    if ( level.zp.vote_hold && kind == "pause" && !level.zp.round_pause
+         && !zp_true( level.zp_paused ) )
     {
         level.zp_vote_provisional = 1;
         level thread zp_do_pause( player );
@@ -3750,9 +4845,13 @@ function zp_vote_finish( passed, yes, needed )
     zp_vote_outcome( "HUD_VOTE_FAILED", yes, needed );
 
     // zp_vote_hold pauses on the way in, so a failed vote has to hand the
-    // game back.
+    // game back -- and hand back the allowance it spent with it. The room
+    // voted the pause down; it never had one.
     if ( provisional && zp_true( level.zp_paused ) )
     {
+        if ( level.zp_pause_count > 0 )
+            level.zp_pause_count = level.zp_pause_count - 1;
+
         level.zp_last_toggle = gettime();
         level thread zp_do_unpause( undefined, "vote failed" );
         return;
@@ -4328,6 +5427,8 @@ function zp_menu_table()
     level.zp_menu_nums = [];
 
     zp_menu_row( "zp_host_only", "flag", "", "input", "Only the host can pause or resume. Everyone else's chat command and combo are ignored, and a pause never goes..." );
+    zp_menu_row( "zp_personal_pause", "flag", "", "input", "The pause input pauses only you, and the game carries on for everyone else; it pauses in full once nobody is..." );
+    zp_menu_row( "zp_pause_menu", "choice", "off|own|room", "input", "Opening the game's own pause menu pauses, and closing it resumes. own follows your own menu, room the whole..." );
     zp_menu_row( "zp_allow_short_words", "flag", "", "input", "Also accept bare p / u / pause in chat. Off by default so normal conversation can't pause the game." );
     zp_menu_row( "zp_button_combo", "flag", "", "input", "Enable the button combos." );
     zp_menu_row( "zp_combo", "choice", "crouch_melee|crouch_use|crouch_frag|crouch_ads|jump_melee|use_frag|frag_only|use_ads|use_attack|attack_ads", "input", "Which combo pauses." );
@@ -4354,7 +5455,7 @@ function zp_menu_table()
     zp_menu_num( 0 ); zp_menu_num( 5 ); zp_menu_num( 10 ); zp_menu_num( 20 ); zp_menu_num( 30 ); zp_menu_num( 60 ); zp_menu_num( 120 );
     zp_menu_row( "zp_vote_hud", "flag", "", "voting", "Show the vote tally on screen." );
     zp_menu_row( "zp_vote_show_voters", "flag", "", "voting", "List each player and how they voted." );
-    zp_menu_row( "zp_vote_hud_position", "choice", "top|bottom|middle|left|right", "voting", "Where the vote tally sits. See Where the HUD sits." );
+    zp_menu_row( "zp_vote_hud_position", "choice", "top|bottom|middle|left|right|center", "voting", "Where the vote tally sits. See Where the HUD sits." );
     zp_menu_row( "zp_vote_alive_only", "flag", "", "voting", "Leave bled-out spectators out of the threshold and the count." );
     zp_menu_row( "zp_vote_result_time", "number", "", "voting", "Seconds the result stands on the tally after a vote resolves. 0 = clear at once." );
     zp_menu_num( 0 ); zp_menu_num( 1 ); zp_menu_num( 2 ); zp_menu_num( 3 ); zp_menu_num( 5 ); zp_menu_num( 10 );
@@ -4437,6 +5538,22 @@ function zp_menu_num( value )
     replicated, so a player running no scripts at all still sees the tally
     and which buttons to hold.
    ================================================================== */
+
+/*
+    A HUD element the engine would not make, kept where somebody can read
+    it: zp_hud_missing names the last line that could not be drawn, and the
+    console shows it with zp_hud_missing on its own.
+
+    Nothing of ours can fix it -- these come out of pools the whole server
+    shares, and several mods drawing at once is how one runs dry -- but a
+    pause banner missing half its text looks exactly like a mod that forgot
+    to draw, and this is the difference. println() is inside a devblock on
+    this engine, so a dvar is where it goes.
+*/
+function zp_hud_missing( what )
+{
+    setdvar( "zp_hud_missing", what );
+}
 
 function zp_hud_text( elem, txt )
 {
@@ -4683,6 +5800,309 @@ function zp_vote_hud_destroy()
 
 
 /* ==================================================================
+    THE SHARED MOD API
+
+    Xep's mods find each other on level.zmods: an array keyed by mod id,
+    each key a struct saying what that mod is and handing over the few
+    things another mod may ask it to do. ZPause's goes up as the script
+    finishes loading, and again -- saying enabled 0 -- when zp_enabled is
+    off, since "not installed" and "installed and switched off" are
+    different answers.
+
+    Nothing outside calls zp_do_pause() or zp_do_unpause(). The requests
+    below go in at the same door the chat words, the button combo and the
+    game's own pause menu use, so a pause
+    another mod asks for still answers to zp_host_only, the vote, the
+    cooldown and zp_max_pauses, and cannot arrive while the game is
+    already busy putting one up or taking one down.
+
+    ZPause's public API handoff is the contract. api_version 1 is this.
+   ================================================================== */
+
+/*
+    The descriptor. Written into whatever registry is already there --
+    another mod may have made it first, and replacing the array would be
+    that mod's entry gone.
+*/
+function zp_api_register( benabled )
+{
+    if ( !isdefined( level.zmods ) )
+        level.zmods = [];
+
+    if ( !isdefined( level.zmods[ "zpause" ] ) )
+        level.zmods[ "zpause" ] = spawnstruct();
+
+    mod = level.zmods[ "zpause" ];
+
+    mod.id = "zpause";
+    mod.display_name = "ZPause";
+    mod.version = zp_version();
+    mod.api_version = 1;
+    mod.settings_manifest_version = 1;
+    mod.enabled = benabled;
+
+    mod.reload_config = &zp_api_reload_config;
+    mod.request_toggle = &zp_api_request_toggle;
+    mod.request_pause = &zp_api_request_pause;
+    mod.request_unpause = &zp_api_request_unpause;
+    mod.is_paused = &zp_api_is_paused;
+}
+
+/*
+    Read the settings again -- for a mod that has just written one of
+    ZPause's dvars and wants it to count now rather than at the next
+    pause. 1 when there was something to read.
+*/
+function zp_api_reload_config()
+{
+    if ( !zp_true( level.zp_loaded ) || !isdefined( level.zp ) || !level.zp.enabled )
+        return 0;
+
+    zp_load_config();
+    return 1;
+}
+
+/*
+    Whether the game is paused. level.zp_paused is ZPause's own field and
+    not the contract: this is.
+*/
+function zp_api_is_paused()
+{
+    if ( zp_true( level.zp_paused ) )
+        return 1;
+
+    return 0;
+}
+
+/*
+    Who a request with no initiator of its own belongs to. The host, and
+    where the engine will not say who that is -- some clients answer
+    ishost() for nobody, and a dedicated server has no host at all -- the
+    player who is alone in the game, since there is no one else it could
+    be. A menu press is the host's by construction: the row is only drawn
+    on the host's own screen.
+*/
+function zp_api_initiator()
+{
+    host = zp_host_player();
+
+    if ( isdefined( host ) )
+        return host;
+
+    players = getplayers();
+
+    if ( players.size == 1 )
+        return players[0];
+
+    return undefined;
+}
+
+function zp_api_request_toggle( player )
+{
+    return zp_api_request( player, "toggle" );
+}
+
+function zp_api_request_pause( player )
+{
+    return zp_api_request( player, "pause" );
+}
+
+function zp_api_request_unpause( player )
+{
+    return zp_api_request( player, "unpause" );
+}
+
+/*
+    One door for the three above. An undefined initiator is the host
+    asking, which is what a press on a menu row is.
+*/
+function zp_api_request( player, what )
+{
+    if ( !zp_true( level.zp_loaded ) || !isdefined( level.zp ) || !level.zp.enabled )
+        return 0;
+
+    if ( !isdefined( player ) )
+        player = zp_api_initiator();
+
+    if ( !isdefined( player ) )
+        return 0;
+
+    /*
+        Threaded, the same as the chat word and the button combo: a request can end up
+        waiting on a vote, and a caller is not made to wait with it.
+    */
+    if ( what == "pause" )
+        level thread zp_request_pause( player );
+    else if ( what == "unpause" )
+        level thread zp_request_unpause( player );
+    else
+        level thread zp_request_toggle( player );
+
+    return 1;
+}
+
+/*
+    The menu's own press, arriving the way the pause menu reports itself:
+    Engine.SendMenuResponse() under the menu name "zpause". The row is the
+    host's -- every setting behind it is one of the host's dvars -- so
+    only the host's press is taken.
+*/
+function zp_api_menu_request( response )
+{
+    if ( !isdefined( response ) )
+        return;
+
+    if ( response != "request_toggle" && response != "request_pause"
+         && response != "request_unpause" )
+        return;
+
+    /*
+        The host's press, and nobody else's -- but only where the engine
+        will say who the host is. Where it will not, the row was drawn on
+        this screen and this is the screen that pressed it; everything
+        that decides a pause still has its say downstream.
+    */
+    if ( isdefined( zp_host_player() ) && !zp_player_is_host( self ) )
+    {
+        self zp_say( "MSG_HOST_ONLY" );
+        return;
+    }
+
+    /*
+        A resume asked for from inside the pause menu is not the pause
+        menu's own resume as well: without this, closing the menu
+        afterwards would ask for a second one.
+    */
+    self.zp_menu_paused = undefined;
+
+    if ( response == "request_pause" )
+        zp_api_request_pause( self );
+    else if ( response == "request_unpause" )
+        zp_api_request_unpause( self );
+    else
+        zp_api_request_toggle( self );
+}
+
+/*
+    What the menu needs and cannot work out for itself: whether ZPause is
+    running in this match, and whether the game is paused right now --
+    which is what decides between PAUSE GAME and UNPAUSE GAME on the row.
+
+    Published from one place rather than from every path that could move
+    either, so no path can forget. The menu is the host's own screen, in
+    the host's own game, so a dvar reaches it.
+*/
+/*
+    The other road a menu press takes. zp_ui_request is written by the
+    settings page and by whatever shell a bundle draws, and read and
+    cleared here: one word, no serial, because clearing it is what makes
+    the next press a new one.
+
+    Two roads rather than one because only one of them is proven on every
+    client. The menu response is the road the pause menu already reports
+    itself on, and a dvar is the road every setting on that screen already
+    travels -- a press that arrives twice is a press that arrives, since
+    the first one to be served clears the other.
+*/
+function zp_api_request_watcher()
+{
+    level endon( "end_game" );
+
+    setdvar( "zp_ui_request", "" );
+
+    for (;;)
+    {
+        wait 0.1;
+
+        asked = getdvarstring( "zp_ui_request" );
+
+        if ( asked == "" )
+            continue;
+
+        // Cleared before it is served: a request that cannot be served is
+        // still one that has been answered, and a dvar left set would be
+        // acted on again a tenth of a second later.
+        setdvar( "zp_ui_request", "" );
+
+        if ( asked == "pause" )
+            zp_api_request_pause( undefined );
+        else if ( asked == "unpause" )
+            zp_api_request_unpause( undefined );
+        else if ( asked == "toggle" )
+            zp_api_request_toggle( undefined );
+    }
+}
+
+function zp_ui_publisher()
+{
+    level endon( "end_game" );
+
+    level thread zp_ui_clear();
+    level thread zp_api_request_watcher();
+
+    setdvar( "zp_ui_active", "1" );
+    setdvar( "zp_ui_paused", "0" );
+    setdvar( "zp_ui_menu_pause", "0" );
+
+    last = "0";
+    last_menu = "0";
+
+    for (;;)
+    {
+        wait 0.5;
+
+        /*
+            Whether opening the pause menu is itself the pause. It is what
+            takes the menu's own PAUSE GAME row away: with zp_pause_menu on
+            the menu has already pressed pause by the time the row could be
+            read, and a row that says the opposite of what just happened is
+            worse than no row.
+        */
+        menu = "0";
+
+        if ( zp_menu_on() )
+            menu = "1";
+
+        if ( menu != last_menu )
+        {
+            last_menu = menu;
+            setdvar( "zp_ui_menu_pause", menu );
+        }
+
+        now = "0";
+
+        if ( zp_true( level.zp_paused ) || zp_true( level.zp_pending ) )
+        {
+            now = "1";
+        }
+        else
+        {
+            host = zp_host_player();
+
+            if ( isdefined( host ) && zp_true( host.zp_personal ) )
+                now = "1";
+        }
+
+        if ( now != last )
+        {
+            last = now;
+            setdvar( "zp_ui_paused", now );
+        }
+    }
+}
+
+function zp_ui_clear()
+{
+    level waittill( "end_game" );
+
+    setdvar( "zp_ui_active", "0" );
+    setdvar( "zp_ui_paused", "0" );
+    setdvar( "zp_ui_menu_pause", "0" );
+    setdvar( "zp_ui_request", "" );
+}
+
+
+/* ==================================================================
     SAFETY
 
     If the game ends while paused, tear everything down so nobody is
@@ -4706,6 +6126,18 @@ function zp_vote_hud_destroy()
     a version and a build time on a development build, an empty string on
     a release. Do not edit it by hand; the next build will overwrite it.
 */
+/*
+    The version on its own, without the build time or the word ZPause:
+    what level.zmods says ZPause is. Written by tools/build.py between the
+    markers, the same as the stamp below, and never by hand.
+*/
+function zp_version()
+{
+    // ZP_VERSION_BEGIN
+    return "1.6";
+    // ZP_VERSION_END
+}
+
 function zp_build()
 {
     // ZP_BUILD_BEGIN
@@ -4904,6 +6336,11 @@ function zp_endgame_safety()
         p zp_blur_off();
         p zp_menu_draw_destroy();
         p.zp_menu_open = undefined;
+
+        // Personal pauses end with the game, the same as the rest of it.
+        p notify( "zp_personal_off" );
+        p.zp_personal = undefined;
+        p zp_personal_hud_off();
 
         if ( zp_true( p.zp_frozen ) )
         {

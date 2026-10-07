@@ -4,14 +4,16 @@
 
 by Xep
 
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/F6L1285ROA)
+
 [**Download the latest release**](https://github.com/Xeptix/ZPauseT7/releases/latest)
 
 A port of [ZPause](https://github.com/Xeptix/ZPause), the Black Ops II pause mod, to
-Black Ops III. Same design, same settings, same version numbering — v1.4 here is feature
+Black Ops III. Same design, same settings, same version numbering - v1.4 here is feature
 equal to v1.4 there.
 
 Any player can pause. Any player can unpause. The state lives on `level`, so it's
-identical for everyone — there's no per-client state that can desync.
+identical for everyone - there's no per-client state that can desync.
 
 - Zombies stop where they are, mid-stride, and stop spawning
 - Boss fights and scripted encounters hold too
@@ -27,7 +29,7 @@ identical for everyone — there's no per-client state that can desync.
 Black Ops III, zombies.
 
 How ZPause loads depends on how you play. **The download carries every loose-script route**
-— `install.bat` finds which of them you have and installs only to those. It is the same
+- `install.bat` finds which of them you have and installs only to those. It is the same
 installer that ships with every ZPause download: it knows all five games, and a copy kept
 on your PC can install any of them, fetching a game's release from GitHub when the files
 are not beside it.
@@ -44,14 +46,14 @@ BO2-style and BO3-style syntax", and the t7-compiler is where that dialect came 
 BOIII is a BOIII fork with the same `boiii.exe` and the same folders, so it is the same
 route.
 
-**T7x loads compiled GSC rather than source** — its own scripts ship as compiled `.gsc`
+**T7x loads compiled GSC rather than source** - its own scripts ship as compiled `.gsc`
 files beside `.gsc_raw` sources, and a raw file in `custom_scripts` does not load. The
 download carries a build made for it, so the installer treats T7x like any other route and
 you do not need mod tools.
 
 The one thing that route cannot do is take your settings from the installer. The config
 editor works by rewriting defaults into the installed script, and a compiled one has no
-text to rewrite — so it writes a `zpause.cfg` into T7x's own settings folder instead, and
+text to rewrite - so it writes a `zpause.cfg` into T7x's own settings folder instead, and
 in game you run:
 
 ```
@@ -69,11 +71,11 @@ another mod. Every other route is a loose script and takes no slot.
 
 | | What it is |
 |---|---|
-| [T7 Patch](https://github.com/shiversoftdev/t7patch) | security patch — a `d3d11.dll`, game launches normally |
+| [T7 Patch](https://github.com/shiversoftdev/t7patch) | security patch - a `d3d11.dll`, game launches normally |
 | [Clean Ops](https://github.com/notnightwolf/cleanopsT7/wiki) | the same, plus p2p hosting and an anti-cheat |
 | [BO3Enhanced](https://github.com/shiversoftdev/BO3Enhanced) | lets the Windows Store build run on Steam files |
 
-None of the three loads scripts, and none takes the mod slot — ZPause runs alongside any of
+None of the three loads scripts, and none takes the mod slot - ZPause runs alongside any of
 them by any route above. **Run T7 Patch or Clean Ops, not both:** Clean Ops carries all of
 T7 Patch's security work and says plainly that it conflicts with it. Run one regardless of
 ZPause, since unpatched Black Ops III has remote code execution exploits that get used in
@@ -82,7 +84,7 @@ public lobbies.
 The one pairing to avoid is **the t7-compiler under a patch**. T7 Patch says it "uses a lot
 of complicated techniques to patch the game that interfere with most third party tools",
 and an external injector is exactly such a tool. Use BOIII, T7x or the Workshop build
-instead — none of them injects anything.
+instead - none of them injects anything.
 
 ---
 
@@ -107,23 +109,23 @@ That is the ZPause T7 Manager, and it does more than a first install needs:
 - **install or update** to the routes you tick, after showing the changelog for the
   version you are about to get
 - show **what's installed**, and which version each copy is
-- **configure ZPause** — every setting, grouped the way the script groups them, each with
+- **configure ZPause** - every setting, grouped the way the script groups them, each with
   its default and a one-line description of what it does. See below.
-- **remove** ZPause again — the loose scripts only; a Workshop subscription is Steam's
+- **remove** ZPause again - the loose scripts only; a Workshop subscription is Steam's
 - **check GitHub** for a newer release and download it, with a progress bar
-- **install a different version** — every download it makes is kept, so going back to an
+- **install a different version** - every download it makes is kept, so going back to an
   older build is the same two keystrokes as going forward. It can list what GitHub has and
   fetch any of those too.
-- **put back a file it replaced** — it copies out whatever it is about to overwrite, so an
+- **put back a file it replaced** - it copies out whatever it is about to overwrite, so an
   install can be undone even over a script you had edited yourself
-- **check my setup** — one key that looks for the handful of things that actually go
+- **check my setup** - one key that looks for the handful of things that actually go
   wrong: copies at different versions, files something has edited since they were
   installed, settings that never reached the game, settings that cannot reach T7x
 - **keep itself** on your PC with a Desktop or Start-menu shortcut, so you never have to
   go looking for the download again
 
 Nothing in that keep-list is ever deleted behind your back. After a download it shows what
-it is holding and offers to clear the older ones out — answering no keeps them all. It
+it is holding and offers to clear the older ones out - answering no keeps them all. It
 also writes a plain-text log of everything it installs or removes.
 
 ### Configuring it from the installer
@@ -132,20 +134,20 @@ Every setting is a dvar, and the config editor is a way to set them without touc
 console. It reads the settings out of the script itself, so the list is always right for
 the version you have, with the description of each one from the table further down.
 
-Saving writes a **`zpause.cfg`** into your Black Ops III folder — plain `set zp_vote "1"`
+Saving writes a **`zpause.cfg`** into your Black Ops III folder - plain `set zp_vote "1"`
 lines, which is exactly what a dedicated server execs, so it is also the file to send
-someone or reuse on another PC — and puts the values into the installed script, so they
+someone or reuse on another PC - and puts the values into the installed script, so they
 take effect with no console step. You can pick either or both. Your settings are re-applied
 automatically after an update, so a new version never quietly resets them.
 
 **T7x is the exception**, because it runs a compiled script and there is nothing in one to
 rewrite. Saving writes its cfg to T7x's own settings folder and you run
-`exec zpause/zpause.cfg` in game — see above. The other three routes need no console step.
+`exec zpause/zpause.cfg` in game - see above. The other three routes need no console step.
 
 Settings that take a fixed set of values offer that list rather than a blank prompt, so a
 typo cannot leave you with a combo the game silently ignores. Type a setting's name at any
-config screen to jump straight to it. You can keep several **profiles** — a solo one and a
-server one, say — and switch between them; each is its own shareable cfg. And when an
+config screen to jump straight to it. You can keep several **profiles** - a solo one and a
+server one, say - and switch between them; each is its own shareable cfg. And when an
 update changes a default you had been getting implicitly, it says so before installing.
 
 ### Checksums
@@ -168,7 +170,7 @@ install.bat -Find                show what it detects, change nothing
 
 `install.sh` takes the same things as `--install --yes`, `--uninstall --yes` and `--find`.
 
-It asks before it touches the network, every run — answer no and it makes no connection
+It asks before it touches the network, every run - answer no and it makes no connection
 at all. It only ever writes or removes `zpause.gsc`, at paths it found itself: no deletes,
 no folders removed, nothing else touched.
 
@@ -213,7 +215,7 @@ can go across at once. Original BOIII reads both its game-folder and its AppData
 folders, so either one works there.
 
 **Ezz BOIII clears its AppData folder every time it launches**, taking anything it didn't put
-there with it — so on Ezz BOIII, use the game folder. A copy in AppData is gone before the
+there with it - so on Ezz BOIII, use the game folder. A copy in AppData is gone before the
 game has started.
 
 ### Steam Workshop
@@ -223,14 +225,18 @@ then pick ZPause from the Mods menu. Nothing to build and nothing to copy.
 
 **It takes your one mod slot.** Black Ops III only enables one mod at a time, so while
 ZPause is selected you can't run another. If that matters, use one of the loose-script
-routes above — they take no slot and coexist with any mod you like. To run it with ZShare,
-subscribe to **[ZBundle](https://steamcommunity.com/sharedfiles/filedetails/?id=3802815997)**,
-which is both in one mod. All three are in
+routes above - they take no slot and coexist with any mod you like. To run it with Xep's
+other Zombies mods, subscribe to
+**[ZBundle](https://steamcommunity.com/sharedfiles/filedetails/?id=3802815997)**, which is
+ZPause, [ZShare](https://steamcommunity.com/sharedfiles/filedetails/?id=3802815009),
+[ZStats](https://steamcommunity.com/sharedfiles/filedetails/?id=3814909842) and
+[ZTweaks](https://steamcommunity.com/sharedfiles/filedetails/?id=3814908789) in one mod. They
+are all in
 [Xep's Black Ops III Zombies collection](https://steamcommunity.com/workshop/filedetails/?id=3802560637).
 
 **In your language.** The Workshop build draws every line in the language your game is set
-to — English, French, Italian, Spanish, German, Brazilian Portuguese, Russian, Polish,
-Japanese, and Traditional and Simplified Chinese — and in a mixed lobby each player reads
+to - English, French, Italian, Spanish, German, Brazilian Portuguese, Russian, Polish,
+Japanese, and Traditional and Simplified Chinese - and in a mixed lobby each player reads
 their own. The loose-script routes stay in English: there is no fastfile to carry
 translations in.
 
@@ -250,11 +256,11 @@ script=scripts/shared/duplicaterender_mgr.gsc
 ```
 
 That's the compiler's own default and it does nothing in zombies, which is what makes it
-safe — but it's also the slot every tutorial-following script uses, and two scripts can't
+safe - but it's also the slot every tutorial-following script uses, and two scripts can't
 share one. If something else already occupies it, point `gsc.conf` at another script you're
 not using and rebuild.
 
-This is the one route not to use under a security patch — see above.
+This is the one route not to use under a security patch - see above.
 
 ### Why the Workshop build wears a stock script's name
 
@@ -264,10 +270,10 @@ is the one worth taking: 72 lines, nothing in the game calls `clientids::` from 
 and `.clientid` is read only by campaign script. Everything it does is carried across
 unchanged, so overriding it costs nothing.
 
-The loose-script routes need none of that — BOIII, T7x and the compiler all load a script
+The loose-script routes need none of that - BOIII, T7x and the compiler all load a script
 directly, so there it keeps its own namespace and stands in for nothing.
 
-You don't need to restart the game to load a new script — end the current match and start a
+You don't need to restart the game to load a new script - end the current match and start a
 new one.
 
 ---
@@ -280,7 +286,7 @@ new one.
 | Vote yes, while a vote is open | the same combo |
 | Vote no, while a vote is open | hold **jump + melee** |
 
-Crouching *or* prone counts — `stancebuttonpressed()` covers both.
+Crouching *or* prone counts - `stancebuttonpressed()` covers both.
 
 The combo keeps working while you're frozen: `freezecontrols()` blocks movement and weapon
 use, but button state still reaches the server. That's what lets a frozen player resume.
@@ -302,6 +308,85 @@ those buttons at all. Downed and spectating players switch to:
 
 The HUD shows a `while down:` line whenever anybody is in that state.
 
+### Pausing just yourself
+
+Set **`zp_personal_pause 1`** and the pause input pauses only you. You're frozen, you can't
+be hurt, and the zombies ignore you while everybody else plays on. The same input brings
+you back, with the countdown the whole game would get.
+
+The whole game pauses by itself once **nobody is left playing** - everybody else paused
+as well, or everybody still in it down. A team that goes down around somebody who stepped
+away is held for them rather than lost, bleedout and all. It comes back as soon as one of
+the players who paused does; anybody else pressing resume is told it's waiting for them.
+
+- **Not from the floor.** You can't pause yourself while you're down, or it would hold your
+  bleedout while the team fought on.
+- **Always frozen in place**, even with `zp_freeze_players 0` - walking around a running
+  game where nothing can touch you would be a way through a round, not a pause.
+- **It's yours alone,** so it never goes to a vote, the host's approval or the ready check,
+  and `zp_host_only` doesn't stop it.
+- **The limits still apply.** Each personal pause uses one of the match's `zp_max_pauses`,
+  and `zp_max_pause_time` brings you back when it runs out.
+
+On the Workshop build your banner and the messages around it are in your own language, the
+same as the rest of the mod. Off by default.
+
+### The game's own pause menu
+
+Set **`zp_pause_menu own`** and opening Black Ops III's in-game menu pauses the game; closing
+it resumes. Nothing to learn and nothing to press - pausing is what that menu looks like it
+should do.
+
+Opening it is the pause input and closing it is the resume input, so everything else here
+still decides: `zp_host_only`, a vote, the host's approval, the ready check, the cooldown
+and `zp_max_pauses`. With **`zp_personal_pause`** on as well, opening the menu takes you out
+of the game on your own and closing it brings you back - which is the combination worth
+having, since everybody else keeps playing while you're in there.
+
+Closing the menu only resumes a pause your own menu started. A pause somebody else called
+is not yours to end by walking out of a menu, and if you leave while it's open the game is
+handed back for you.
+
+- **Every route but the t7-compiler.** The menu is heard through Lua, which the Workshop
+  build carries in its `core_mod` fastfile and BOIII, Ezz BOIII and T7x load from
+  `ui_scripts` - the same files the lobby settings menu comes in, installed with the script
+  beside them. An injected script reaches a stock client that loads no Lua at all, so on
+  that route the combo and the chat commands are the pause input and this setting does
+  nothing.
+- **Each player's own game reports their own menu**, so a player without ZPause opening
+  theirs pauses nothing.
+- **Solo is left alone.** Black Ops III already pauses a solo game by itself when that menu
+  opens, so ZPause stays out of it and you get no countdown on the way back.
+
+#### The whole room's menus - `zp_pause_menu room`
+
+With `own`, closing your menu only resumes a pause your own menu started, which is why
+somebody else's open menu does nothing while the game is already held. **`zp_pause_menu room`**
+makes the game follow the room instead: it is paused while *anybody's* pause menu is open,
+and it comes back the moment the last one closes. The vanilla pause, working in a co-op game
+the way it already works in solo.
+
+For the game to mirror what the clients are doing, everything that can refuse or defer a
+press has to stand down, and with `room` it does - no vote, no cooldown, no `zp_max_pauses`, no
+`zp_round_pause`, and no countdown on the way back. `zp_personal_pause` stands down too,
+since the whole point is that one player's menu pauses for everybody. **`zp_host_only` still
+applies**: with it on, only the host's menu moves the game and anybody else opens theirs
+without the room noticing.
+
+The pause HUD names everyone who is in a menu rather than whoever got there first, and the
+line changes as people come and go.
+
+- **Leaving with your menu open** takes you off the list, and the game comes back if you
+  were the last one on it.
+- **A close that never arrives cannot strand the game.** An open menu says so twice a second,
+  and one that has gone quiet for a few seconds is dropped from the list.
+- **Solo is still left alone**, for the same reason as `own`: Black Ops III pauses itself when that
+  menu opens, so ZPause stays out of it.
+- **Every route but the t7-compiler**, the same as `own`. A player on a route with no Lua
+  opening their menu is not on the list.
+
+Off by default.
+
 ### The settings menu
 
 While the game is paused, the host can change ZPause's settings without the console. Hold
@@ -314,7 +399,7 @@ While the game is paused, the host can change ZPause's settings without the cons
 | melee | close |
 
 A switch flips, a list moves on to its next choice, and a number steps up through a few
-common values and back round to the lowest — exact values are still the console's. A
+common values and back round to the lowest - exact values are still the console's. A
 change lands when play resumes, the same as one typed into the console, and lasts until the
 game closes. The menu closes itself when a vote opens, since the host needs the buttons
 back to vote. `zp_menu 0` turns it off.
@@ -322,22 +407,70 @@ back to vote. `zp_menu 0` turns it off.
 On the Workshop build the menu speaks your language too; the setting names and their
 values stay as the console spells them.
 
-#### In the lobby
+#### In the lobby, and from the game's own pause menu
 
-The same settings are in the lobby too, on the Workshop build and on BOIII, Ezz BOIII and
-T7x. On the Workshop build, load ZPause from the Mods menu; on the other three the installer
-puts the menu in the game folder's `ui_scripts`, beside the script. Either way the zombies
-lobby gets a **ZPAUSE SETTINGS** button for the host: a page for each part of ZPause, with
-what the setting under the cursor does and what its default is beside it. Left and right
-change a setting. **DEFAULT** leaves it to the script's own default, and **RESET TO
-DEFAULTS**, at the bottom of the first page, puts every setting back there at once.
+The same settings have a page of their own, on the Workshop build and on BOIII, Ezz BOIII
+and T7x. On the Workshop build, load ZPause from the Mods menu; on the other three the
+installer puts the menu in the game folder's `ui_scripts`, beside the script.
 
-A change made there is saved, so it is still set the next time the game starts, and a match
-picks it up as it loads. On the Workshop build it goes into the mod's own save data. On
-BOIII, Ezz BOIII and T7x, which have no mod to keep it in, it goes into the names of your
-offline zombies custom classes, which nothing in a zombies game shows or uses. A change made
-from the pause menu still lasts until the game closes. The t7-compiler route has no lobby
-button: it injects into a game that loads no menus of its own.
+The host gets to it two ways, and both open the same page:
+
+- the zombies lobby has a **ZPAUSE SETTINGS** button, above the gum and build kit buttons;
+- the game's own pause menu has a **ZPAUSE SETTINGS** row, under RESUME GAME, during a
+  match.
+
+The pause menu also has a **PAUSE GAME** row - **UNPAUSE GAME** while the game is paused -
+above that one, for the host. It presses pause exactly as the combo does, so a vote, the
+host's approval, the cooldown and `zp_max_pauses` all still have their say. With
+`zp_pause_menu` on it is not there at all: opening the menu has already pressed pause, so
+the menu is the button.
+
+Solo is a special case, and the row handles it. Black Ops III stops the game by itself
+while the pause menu is open, and a ZPause pause underneath that would be one nothing could
+lift - the script is not running to be asked. So the press leaves the game's own pause
+first: the menu closes, the game runs, and what lands a moment later is ZPause's pause, with
+the countdown, the HUD and the resume. **UNPAUSE GAME** does the same in reverse - the
+menu closes and the game carries on. In co-op the menu pauses nothing, so nothing closes.
+
+A category for each part of ZPause across the top - **INPUT**, **VOTING**, **TIMING**,
+**FREEZING** and **PRESENTATION**. The bumpers move between them, or **Q** and **E**, or the
+arrows either side of the strip, or a click on the category itself; the names either side and
+`CATEGORY n / total` under the strip say where you are and what is next. The settings are
+down the left, seven at a time with the rest scrolled, and the panel on the right says what
+the one under the cursor does, what it is called in the console, what its default is, what a
+change to it waits for and who it is for. Left and right change a setting. **DEFAULT** leaves
+it to the script's own default. Opening it from the pause menu does not close the pause menu,
+so it is not a resume with `zp_pause_menu` on.
+
+**Y**, or **F** on a keyboard, takes everything still at its default out of the category
+you are on, so a long one shows only what has been changed; press it again, or change
+category, to put them back.
+
+Along the bottom: **BACK**, **RESET TAB**, **RANDOMIZE** and **RESET ALL**. The last three
+ask before they do anything, with **NO** already under the cursor, and RANDOMIZE says so
+before it runs - DEFAULT is one of the values it can pick. RESET TAB is the category you are
+on; RESET ALL is every ZPause setting there is.
+
+A change lands on the next pause, whichever way in you used - the script re-reads its
+settings every time a pause is asked for. Two are the exception and the panel says which:
+`zp_show_hint` is drawn as a player spawns and `zp_round_pause` is read as a round ends. It
+is saved as well, so it is still set the next time the game starts. On the Workshop build
+that goes into the mod's own save data; on BOIII, Ezz BOIII and T7x, which have no mod to
+keep it in, into the names of your offline zombies custom classes, which nothing in a zombies
+game shows or uses. The t7-compiler route has neither way in: it injects into a game that
+loads no menus of its own.
+
+The page is the one Xep's other Black Ops III mods draw, so a bundle of them puts every mod's
+settings on one screen with a category each and the title **ZBUNDLE SETTINGS**, which names
+the mod owning the category you are on. Each mod keeps its own settings in its own place;
+nothing here reads or writes another's. A bundle also gets a **MODS** category, first, which
+switches each of those mods on and off - ZPause's row there is `zp_enabled`, and it lands on
+the next match. Last, in every build, is **CHANGED**, which lists everything moved off its
+default in one place, whichever mod owns it.
+
+The Workshop build draws the page over a background image of its own. BOIII, Ezz BOIII and
+T7x draw the same page over a half-transparent black panel - an image has to come out of a
+mod's fastfile, and a loose script has none.
 
 ---
 
@@ -350,7 +483,7 @@ Calling a vote is the same action as pausing. The vote runs 30 seconds and every
 tally: the count, the clock, and every player with how they voted.
 
 The bar is whichever is higher, `zp_vote_min` or `zp_vote_percent` of the players in the
-game, then clamped to how many are actually present — so a lobby can't set a threshold
+game, then clamped to how many are actually present - so a lobby can't set a threshold
 nobody there can clear, and solo play skips the vote entirely. With the defaults that's
 2 of 2, 2 of 3, 3 of 4.
 
@@ -362,7 +495,7 @@ vote by default, so one AFK player can't strand everyone in a paused game.
 
 ### Who decides
 
-Five settings answer the same question — who may pause, and who has to agree. They can all
+Five settings answer the same question - who may pause, and who has to agree. They can all
 be on at once, so this is the order the script applies them in.
 
 **Asking to pause:**
@@ -370,20 +503,20 @@ be on at once, so this is the order the script applies them in.
 | | Setting | What happens |
 |---|---|---|
 | 1 | `zp_host_only` | Anybody but the host is turned away here. Nothing below runs for them. |
-| 2 | — | Refused while the game is still starting. |
+| 2 | - | Refused while the game is still starting. |
 | 3 | `zp_round_pause` | If a pause is already waiting for the round to end, asking again calls it off. |
 | 4 | `zp_max_pauses` | Refused once the match has spent its budget. |
 | 5 | `zp_cooldown` | Refused if the last pause was too recent. |
 | 6 | `zp_host_approve` | A non-host's ask goes to the host to answer. **Takes precedence over `zp_vote`.** |
 | 7 | `zp_vote` | Otherwise, with voting on, it goes to a vote. |
-| 8 | `zp_round_pause` | Once it is agreed — outright, approved or voted — it waits for the round to end instead of happening now. |
+| 8 | `zp_round_pause` | Once it is agreed - outright, approved or voted - it waits for the round to end instead of happening now. |
 
 **Asking to resume:**
 
 | | Setting | What happens |
 |---|---|---|
 | 1 | `zp_host_only` | Anybody but the host is turned away. |
-| 2 | — | With a vote already open, the input is a yes instead. |
+| 2 | - | With a vote already open, the input is a yes instead. |
 | 3 | `zp_cooldown` | Refused if the last toggle was too recent. |
 | 4 | `zp_ready_check` | The input marks you ready rather than resuming. **Takes precedence over `zp_vote_unpause`.** |
 | 5 | `zp_vote_unpause` | Otherwise, with `zp_vote` on as well, it goes to a vote. |
@@ -409,7 +542,7 @@ zp_countdown 5
 ```
 
 The config is re-read every five seconds while the game is running, and again
-whenever a pause is requested, so a change takes effect **almost straight away** — no map
+whenever a pause is requested, so a change takes effect **almost straight away** - no map
 restart needed.
 
 ### Where settings are saved
@@ -418,25 +551,25 @@ Three routes in, and they keep a setting for different lengths of time:
 
 | Set it here | How long it lasts |
 |---|---|
-| The installer's config editor | Permanently — it rewrites the default in the installed script. T7x runs a compiled script instead, so it gets a cfg you `exec`. |
-| The lobby menu | Permanently — it saves into the mod's own storage on the Workshop build, or your offline zombies class names on BOIII, Ezz BOIII and T7x, and puts it back once per game start. |
-| The in-game settings menu, or the console | Until the game closes. |
+| The installer's config editor | Permanently - it rewrites the default in the installed script. T7x runs a compiled script instead, so it gets a cfg you `exec`. |
+| The ZPause settings page, from the lobby or from the pause menu | Permanently - it saves into the mod's own storage on the Workshop build, or your offline zombies class names on BOIII, Ezz BOIII and T7x, and puts it back once per game start. |
+| The fire + melee menu, or the console | Until the game closes. |
 
 Black Ops III is the one port with no settings file behind all this: its file functions are
-all developer-only, so a released script cannot read one. That is why the lobby menu saves
-in the game's own storage instead, and why the in-game menu cannot save for you the way the
-Black Ops II, Black Ops and World at War builds do.
+all developer-only, so a released script cannot read one. That is why the settings page
+saves in the game's own storage instead, and why the fire + melee menu cannot save for you
+the way the Black Ops II, Black Ops and World at War builds do.
 
 The periodic re-read is skipped while the game is paused: the HUD is built from these
 settings when the pause starts and nothing rebuilds it in place, so moving them underneath
 would leave elements where the old values put them. A change made mid-pause lands the
-moment play resumes. It also means `zp_combo` can be changed by hand — before, that needed
+moment play resumes. It also means `zp_combo` can be changed by hand - before, that needed
 a pause to take effect, and the combo is what asks for one.
 
 `set zp_config_print 1` in the console prints every setting below with the value it is
 currently holding, then puts the switch back so it can be used again. On Black Ops III it
 needs a client running developer mode, because `println` is a dev-only call there and the
-game refuses to load a script that makes one outside a devblock — which is the same mode
+game refuses to load a script that makes one outside a devblock - which is the same mode
 that gets you the console it prints to.
 
 Black Ops III also only offers console completions for the dvars its own engine
@@ -445,10 +578,13 @@ their full name.
 
 | Dvar | Default | What it does |
 |---|---|---|
+| `zp_enabled` | `1` | ZPause itself. Off, the script loads and does nothing at all - no pause, no HUD, no chat commands, no combos, nothing precached. **Read when the match loads**, so end the game and start a new one for a change to take. |
 | `zp_menu` | `1` | Let the host change settings from a menu while the game is paused: hold fire and melee to open it. |
 | `zp_host_only` | `0` | Only the host can pause or resume. Everyone else's chat command and combo are ignored, and a pause never goes to a vote. On a dedicated server there is no host, so it falls to whoever holds the first player slot. |
+| `zp_personal_pause` | `0` | The pause input pauses only you, and the game carries on for everyone else; it pauses in full once nobody is left playing. See [Pausing just yourself](#pausing-just-yourself). |
+| `zp_pause_menu` | `off` | Opening the game's own pause menu pauses, and closing it resumes. `own` follows your own menu, `room` the whole room's, `off` neither. **Every route but the t7-compiler.** See [The game's own pause menu](#the-games-own-pause-menu). |
 | `zp_only_script` | `0` | Debug. With both a loose script and the Workshop mod installed, run only the loose one. |
-| `zp_only_mod` | `0` | Debug. The same, the other way round. Both off — the default — is whichever loads first. Both on leaves nothing running. **Read when the script loads**, so end the game and start a new one for a change to take. |
+| `zp_only_mod` | `0` | Debug. The same, the other way round. Both off - the default - is whichever loads first. Both on leaves nothing running. **Read when the script loads**, so end the game and start a new one for a change to take. |
 | `zp_allow_short_words` | `0` | Also accept bare `p` / `u` / `pause` in chat. Off by default so normal conversation can't pause the game. |
 | `zp_button_combo` | `1` | Enable the button combos. |
 | `zp_combo` | `crouch_melee` | Which combo pauses: `crouch_melee`, `crouch_use`, `crouch_frag`, `crouch_ads`, `jump_melee`, `use_frag`, `frag_only`, `use_ads`, `use_attack`, `attack_ads`. |
@@ -456,8 +592,8 @@ their full name.
 | `zp_button_combo_dead` | `use_ads` | Combo used while downed or spectating, when stance and melee stop registering. Also takes `use_attack`, `attack_ads`, `use_frag`, `frag_only`. `none` = chat only. |
 | `zp_vote_no_combo_dead` | `use_attack` | The same, for a no vote. |
 | `zp_input_debug` | `0` | Print each player which buttons the server receives from them, for picking the two above. |
-| `zp_host_approve` | `0` | The host pauses at once; anyone else has to ask and the host answers yes or no. It runs as a vote only the host can cast, so the yes/no input, the HUD and the timeout are a vote's. Pausing only — resuming still follows `zp_vote`. `zp_host_only` wins where both are set. |
-| `zp_ready_check` | `0` | Resuming waits for the players to say they're back. Not a vote — nobody says no and it can't fail, so it needs no `zp_vote`, and it wins over `zp_vote_unpause` where both are set. |
+| `zp_host_approve` | `0` | The host pauses at once; anyone else has to ask and the host answers yes or no. It runs as a vote only the host can cast, so the yes/no input, the HUD and the timeout are a vote's. Pausing only - resuming still follows `zp_vote`. `zp_host_only` wins where both are set. |
+| `zp_ready_check` | `0` | Resuming waits for the players to say they're back. Not a vote - nobody says no and it can't fail, so it needs no `zp_vote`, and it wins over `zp_vote_unpause` where both are set. |
 | `zp_ready_percent` | `100` | How much of the room has to be ready. `100` is everybody. |
 | `zp_vote` | `0` | Put pauses to a vote. See Voting. |
 | `zp_vote_min` | `2` | Minimum yes votes, whatever the player count. |
@@ -477,17 +613,17 @@ their full name.
 | `zp_ease_time` | `0.35` | Seconds of ramp at each end. |
 | `zp_countdown` | `3` | Seconds of 3‑2‑1 before play resumes. |
 | `zp_grace` | `2` | Seconds of invulnerability after resuming. |
-| `zp_max_pauses` | `0` | How many times one match can be paused. `0` is no cap. Only a pause somebody asked for spends one — an automatic pause does not. |
+| `zp_max_pauses` | `0` | How many times one match can be paused. `0` is no cap. Only a pause somebody asked for spends one - an automatic pause does not. |
 | `zp_pause_on_disconnect` | `0` | Pause when somebody drops, so whoever is left isn't overrun while they rejoin. Nothing un-pauses on its own, so `zp_max_pause_time` is the way out if they don't come back. |
 | `zp_round_pause` | `0` | Hold a pause until the round is over instead of freezing the game mid-horde. Asking again calls it off. |
 | `zp_cooldown` | `2` | Minimum seconds between toggles. |
 | `zp_max_pause_time` | `0` | Auto-resume after N seconds. `0` = unlimited. |
 | `zp_engine_freeze` | `1` | Use `setpauseworld()` and the `world_is_paused` flag. |
 | `zp_drift_guard` | `1` | Snap back any AI that still manages to move. |
-| `zp_freeze_anims` | `1` | **No effect on this engine** — the world freeze already stops animation. |
+| `zp_freeze_anims` | `1` | **No effect on this engine** - the world freeze already stops animation. |
 | `zp_silence_zombies` | `1` | Stop zombies growling while paused. |
 | `zp_godmode` | `1` | Make players invulnerable while paused. |
-| `zp_freeze_players` | `1` | Lock players in place while paused. `0` lets them walk around with their weapons down, locked again for the countdown — not recommended, because doors, the box, perks, traps and pickups can all still be used while the zombies are held. |
+| `zp_freeze_players` | `1` | Lock players in place while paused. `0` lets them walk around with their weapons down, locked again for the countdown - not recommended, because doors, the box, perks, traps and pickups can all still be used while the zombies are held. |
 | `zp_control_guard` | `1` | Re-apply the player freeze every tick, so a map script can't hand controls back mid-pause. |
 | `zp_freeze_clock` | `1` | Hold the match timer. |
 | `zp_freeze_powerups` | `1` | Stop ground powerups timing out. |
@@ -505,7 +641,7 @@ their full name.
 | `zp_hud_panel` | `0` | Black slab behind the whole block. Heavier than the glow. |
 | `zp_hud_panel_alpha` | `0.45` | How opaque that slab is. `1` is solid black. |
 | `zp_hud_panel_width` | `340` | How wide it is, in HUD units. |
-| `zp_hud_timer` | `1` | Show who paused and how long it has been. Minutes, not mm:ss — see below. |
+| `zp_hud_timer` | `1` | Show who paused and how long it has been. Minutes, not mm:ss - see below. |
 | `zp_pause_sound` | `zmb_bgb_killingtime_start` | Played when the game is paused. `none` = silent. |
 | `zp_countdown_sound` | `zmb_finalcountdown_timer_marker` | Played on each countdown tick. `none` = silent. |
 | `zp_resume_sound` | `zmb_bgb_killingtime_end` | Played when play resumes. `none` = silent. |
@@ -518,7 +654,7 @@ Both take the same six slots:
 | Value | Where |
 |---|---|
 | `top` | Flush with the top edge, centred. |
-| `center` | Centred horizontally, high enough to stay clear of the action — the classic pause banner spot. |
+| `center` | Centred horizontally, high enough to stay clear of the action - the classic pause banner spot. |
 | `middle` | The actual centre of the screen, over the crosshair. |
 | `bottom` | Above the bottom edge, centred. |
 | `left` | Against the left edge, text left-aligned. |
@@ -528,7 +664,7 @@ The left and right slots align their text to that edge instead of centring it, s
 of voters reads as a clean column rather than a ragged stack.
 
 The pause banner defaults to `center`, the vote tally to `top`. The two never share the
-screen — the vote tally stands in for the pause banner while a vote is open — so you can
+screen - the vote tally stands in for the pause banner while a vote is open - so you can
 put both in the same slot without them colliding.
 
 ### The pause clock is in minutes without an auto-resume
@@ -536,7 +672,7 @@ put both in the same slot without them colliding.
 With `zp_max_pause_time` set, the clock counts down to the auto-resume exactly as it does
 on Black Ops II. Without one, it reports elapsed time in minutes rather than live mm:ss.
 
-Black Ops III has `settimer()`, which counts down, and nothing that counts up — Black Ops
+Black Ops III has `settimer()`, which counts down, and nothing that counts up - Black Ops
 II's `settenthstimerup()` has no equivalent here. Drawing a live second counter as text
 instead would cost a configstring a second until the pool ran dry, which is what took the
 Black Ops II build down before it was fixed. Minutes bound the whole set to about sixty
@@ -557,7 +693,7 @@ setpauseworld( 1 );
 
 ZPause uses that rather than inventing one.
 
-`setpauseworld()` is a true world freeze — AI, physics and animation all stop, so zombies
+`setpauseworld()` is a true world freeze - AI, physics and animation all stop, so zombies
 hold the pose they were in mid-stride rather than standing in an idle. That's a better
 freeze than any other port gets: the Black Ops II build has to swap in a dormant pose, and
 the Black Ops and World at War builds have to cancel scripted animations outright to stop
@@ -568,21 +704,21 @@ watches `world_is_paused` and stops itself:
 
 | Script | What it does while the flag is set |
 |---|---|
-| `_zm.gsc` | `round_spawning` blocks — the spawner stops at the source |
+| `_zm.gsc` | `round_spawning` blocks - the spawner stops at the source |
 | `zm_castle_ee_bossfight` | boss phase timer waits it out |
 | `zm_siegebot_nikolai` | three separate waits |
 | `zm_stalingrad_dragon` | skips its think, refuses damage |
 | `zm_stalingrad_zombie` | two spawn paths wait |
 | `_zm_ai_napalm`, `_zm_ai_sentinel_drone`, `_zm_weap_shrink_ray` | early-out or wait |
 
-So a pause here goes deeper than on the other engines — boss fights and scripted
+So a pause here goes deeper than on the other engines - boss fights and scripted
 encounters hold themselves, with nothing asked of ZPause.
 
 **Players are exempted from it.** `setpauseworld()` freezes players too, which is why the
 campaign calls `setignorepauseworld( 1 )` on anyone it wants to keep moving through a
 paused scene. Here the reason is existential: a player who stops being simulated stops
 reporting `usebuttonpressed()`, and nobody could ever unpause. So players are exempted from
-the world freeze and locked the ordinary way with `freezecontrols()` — the same pairing
+the world freeze and locked the ordinary way with `freezecontrols()` - the same pairing
 Treyarch uses.
 
 **A zombie on its way in keeps its goal.** Behind the world freeze, ZPause pins each
@@ -607,7 +743,7 @@ Everything else is the Black Ops II build:
 
 Killing Time uses the same flag and the same builtin. If the world is already paused when
 ZPause arrives, ZPause leaves it exactly as it found it and doesn't clear anything on the
-way out — so a GobbleGum popped during a pause, or a pause called during a GobbleGum,
+way out - so a GobbleGum popped during a pause, or a pause called during a GobbleGum,
 can't have one release the other's freeze.
 
 ---
@@ -631,7 +767,7 @@ can't have one release the other's freeze.
 | Game | Repo |
 |---|---|
 | Black Ops 4 (T8) | [ZPauseT8](https://github.com/Xeptix/ZPauseT8) |
-| Black Ops III (T7) | ZPauseT7 — you are here |
+| Black Ops III (T7) | ZPauseT7 - you are here |
 | Black Ops II (T6) | [ZPause](https://github.com/Xeptix/ZPause) |
 | Black Ops (T5) | [ZPauseT5](https://github.com/Xeptix/ZPauseT5) |
 | World at War (T4) | [ZPauseT4](https://github.com/Xeptix/ZPauseT4) |
@@ -643,26 +779,124 @@ for what each engine can actually do.
 
 ## Changelog
 
+### v1.6
+
+- **`zp_enabled` - the mod's own switch, and two new categories with it.** On by default.
+  Off, ZPause loads and installs nothing at all: no pause, no HUD, no chat commands, no
+  combos, nothing precached. It is read as a match loads, so a change lands on the next one
+  rather than the one being played. The settings screen gained the two categories that go
+  with it: **MODS**, which switches each mod on the screen on and off and is only there when
+  there is more than one of them, and **CHANGED**, which lists everything anybody has moved
+  off its default. The game's own pause menu gained a **PAUSE GAME** row for the host -
+  **UNPAUSE GAME** while the game is paused - and the title above each category now names
+  the mod that owns it.
+
+- **Xep's other mods can ask ZPause to pause.** ZPause puts itself on `level.zmods` as the
+  match starts, with its version and the few things another mod may ask it to do: reload the
+  settings, pause, resume, toggle, and say whether the game is paused. A pause asked for that
+  way goes in at the same door a chat command or a combo does, so voting, the host's
+  approval, the cooldown and `zp_max_pauses` all still have their say.
+
+- **The settings page is now the one every Z mod draws.** Same title, same category strip,
+  same seven-row list, same details panel, same footer - so a bundle of Xep's Black Ops III
+  mods puts all of their settings on one screen, a category each, under **ZBUNDLE SETTINGS**,
+  and each mod still keeps its own settings in its own place. On the way it gained the names
+  of the categories either side and `CATEGORY n / total`, **Q** and **E** as well as the
+  bumpers, **RESET TAB** and **RANDOMIZE** beside **RESET ALL** - each asking first, with
+  **NO** under the cursor - and a panel that now also says what a change waits for and who
+  the setting is for. The categories no longer split in two when a section runs long, since
+  the list scrolls. See
+  [In the lobby, and from the game's own pause menu](#in-the-lobby-and-from-the-games-own-pause-menu).
+
+- **ZPause's settings from the game's own pause menu, and a page rebuilt around it.** The
+  pause menu has a **ZPAUSE SETTINGS** row for the host, under RESUME GAME, and it opens the
+  same page the lobby button does: a tab for each part of ZPause, the settings down the left,
+  and a panel on the right saying what the one under the cursor does, what its default is and
+  what it is called in the console. A change lands on the next pause, so it takes effect in
+  the match you are in. Opening it does not close the pause menu, so it is not a resume with
+  `zp_pause_menu` on. The Workshop build draws the page over a background image of its own;
+  BOIII, Ezz BOIII and T7x draw it over a half-transparent black panel, since an image has to
+  come out of a mod's fastfile and a loose script has none. The fire + melee menu is
+  unchanged. See
+  [In the lobby, and from the game's own pause menu](#in-the-lobby-and-from-the-games-own-pause-menu).
+
+- **The pause-menu hook reaches BOIII, Ezz BOIII and T7x at last.** `zp_pause_menu` needs a
+  Lua file that every build wrote and no download carried, so the menu asked for a file that
+  was not there. It ships now, and the build fails rather than leaving it out.
+
+- **`zp_pause_menu` - the game's own pause menu pauses the game.** Off by default, and on
+  every route but the t7-compiler's, since the menu is heard through Lua and an injected
+  script reaches a client that loads none. Opening it is the pause input and closing it is
+  the resume input, so votes, approval and the rest still apply; with `zp_personal_pause`
+  on it takes you out on your own. See
+  [The game's own pause menu](#the-games-own-pause-menu).
+
+- **`zp_personal_pause` - pause just yourself.** Off by default. With it on, the pause
+  input takes only you out of the game: frozen, protected and ignored by the zombies while
+  everybody else plays on. The whole game pauses once nobody is left playing, and comes back
+  with the first player who paused. See [Pausing just yourself](#pausing-just-yourself).
+
+- **The Workshop build no longer breaks the game when it is switched off.** It stands in
+  for one of Black Ops III's own scripts, the one that gives every player their client id,
+  and `zp_only_script 1` used to stop that script's work along with ZPause's. The game's
+  own code reads those ids while it is scoring a kill. The stock half now always runs,
+  whichever copy of ZPause is switched on.
+
+- **The ready check can no longer strand a paused game.** With `zp_ready_check` on, the
+  tally was only ever recounted when somebody pressed ready, so if the last player who had
+  not pressed dropped out, nobody left could end the pause. A player leaving now recounts.
+
+- **A pause that has already ended is not ended twice.** With `zp_max_pause_time` set, the
+  automatic resume could fire while a resume vote was open; the vote then passed into a
+  running game and played the whole resume again. The resume now leaves a running game
+  alone, and closes an open vote on its way out.
+
+- **A vote nobody carried no longer costs a pause**, with `zp_vote_hold` on.
+
+- **The pause banner no longer sits on top of the vote**, with `zp_vote_hold` on - it was
+  telling everybody to press the combo that was a yes vote.
+
+- **`zp_round_pause` is respected by a vote.** With `zp_vote_hold` on as well, a passing
+  vote froze the game where it stood instead of waiting for the round to end.
+
+- **A pause waiting for the round to end can only be called off by whoever asked for it,
+  or the host.**
+
+- **Two-letter words no longer vote.** Chat is also read with its first character dropped,
+  because BOIII and T7x put one in front; that turned "my" and "by" into a yes and "on",
+  "in", "an" and "un" into a no while a vote was open. The character is only dropped now
+  when it is not a letter or a digit.
+
+- **The pause clock no longer leaves a thread behind for every vote.** It waited for a
+  signal the script never sent, so each vote during a pause started another one.
+
+- **The lobby menu keeps a change it could not save.** If writing to the save file failed,
+  the change was dropped rather than written on the next try.
+
+- **The lobby menu offers every value again.** A setting's own default was left out of its
+  list, so once the installer's config editor had changed a default, the value it used to
+  be could not be picked there any more.
+
 ### v1.5
 
 - **The chat commands work here, on every route.** `!pause`, `!p`, `!unpause`, `!resume`,
-  and `yes` / `no` while a vote is open — the same words as on Black Ops II. This port
+  and `yes` / `no` while a vote is open - the same words as on Black Ops II. This port
   shipped without them because nothing in Black Ops III's own scripts listens for chat, and
   that turned out to prove nothing: the game raises the notify on the player, and BOIII and
   T7x raise it themselves after their own chat handling. `zp_allow_short_words` widens them
   to the bare words, and stops being a setting that does nothing here. The pause banner
   names `!unpause` beside the combo now, and the `while down:` line offers `!yes` / `!no`
-  wherever a down combo is set to `none` — in every language the Workshop build ships.
+  wherever a down combo is set to `none` - in every language the Workshop build ships.
 
 - **A zombie paused on its way in through a window picks up where it was.** Resuming used
   to snap it to the window and straight into tearing the boards, from wherever it had been
   walking. The pause holds zombies with the world freeze and, behind it, pins each one's
-  goal to where it stands — and a zombie's walk to the window ends the moment it is at its
+  goal to where it stands - and a zombie's walk to the window ends the moment it is at its
   goal, with the board tear that follows lined up against the window. While the world
   freeze holds it, a zombie that isn't through its window yet keeps the goal the game gave
   it, which is how Killing Time holds it.
 
-- **`zp_freeze_players`** — set it to `0` and players can walk around a paused game with
+- **`zp_freeze_players`** - set it to `0` and players can walk around a paused game with
   their weapons down, and are locked again for the countdown back in. Players are still
   locked by default, and roaming isn't recommended: doors, the box, perks, traps and
   pickups can all still be used while the zombies are held.
@@ -680,7 +914,8 @@ for what each engine can actually do.
 - **The same settings in the lobby, on the Workshop build, BOIII, Ezz BOIII and T7x.** The
   zombies lobby has a **ZPAUSE SETTINGS** button for the host, with a page for each part of
   ZPause, what each setting does and its default. What you set there is saved, so it is
-  still set the next time the game starts. See [In the lobby](#in-the-lobby).
+  still set the next time the game starts. See
+  [In the lobby, and from the game's own pause menu](#in-the-lobby-and-from-the-games-own-pause-menu).
 
 - **Ezz BOIII, and one Black Ops III folder per client.** Ezz BOIII clears its AppData
   folder every time it launches, so ZPause goes in its game folder there. A player who keeps
@@ -711,15 +946,15 @@ doesn't allow it:
   carried so one config reads the same on every port. Both changed in v1.5.
 - **The pause clock is in minutes** unless `zp_max_pause_time` is set. Black Ops III has no
   `settenthstimerup()`, so an open-ended pause counts up in minutes rather than live mm:ss
-  — see [The pause clock is in minutes without an auto-resume](#the-pause-clock-is-in-minutes-without-an-auto-resume).
+  - see [The pause clock is in minutes without an auto-resume](#the-pause-clock-is-in-minutes-without-an-auto-resume).
 - **`zp_freeze_anims` does nothing here.** The world freeze already stops animation.
-- **The screen blackout is a screen fade**, not a black HUD element — Black Ops III has no
+- **The screen blackout is a screen fade**, not a black HUD element - Black Ops III has no
   `precacheshader()`, so an injected script cannot pull a material in.
 - **The `zp_` dvars do not appear in console completion.** Black Ops III only completes the
   dvars its own engine registered, and no GSC call adds one. `set zp_config_print 1` prints
   every setting and its current value instead.
 - **T7x cannot take its settings from the installer.** It runs a compiled script and there
-  is nothing in one to rewrite, so the config editor writes a cfg you exec — see
+  is nothing in one to rewrite, so the config editor writes a cfg you exec - see
   [Configuring it from the installer](#configuring-it-from-the-installer). The other three
   routes take settings the usual way.
 
@@ -728,8 +963,8 @@ Steam Workshop, and the t7-compiler. Only the Workshop build takes your one mod 
 
 ## Credits
 
-- **Xep** — author
-- **Treyarch** — `_zm_bgb_killing_time.gsc`, the pause recipe this is built on
-- **[Serious](https://github.com/shiversoftdev)** — t7-source, and the compiler this
+- **Xep** - author
+- **Treyarch** - `_zm_bgb_killing_time.gsc`, the pause recipe this is built on
+- **[Serious](https://github.com/shiversoftdev)** - t7-source, and the compiler this
   builds with
-- **D3V Team** — L3akMod, which the Workshop build's lobby menu is built with
+- **D3V Team** - L3akMod, which the Workshop build's lobby menu is built with
