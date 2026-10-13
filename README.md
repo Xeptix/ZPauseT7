@@ -4,7 +4,9 @@
 
 by Xep
 
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/F6L1285ROA)
+[![Support the mod on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/F6L1285ROA)
+[![Support the mod on Patreon](https://img.shields.io/badge/Patreon-Xeptix-F96854?logo=patreon&logoColor=white)](https://www.patreon.com/Xeptix)
+[![Join the Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/RE85HRwYZZ)
 
 [**Download the latest release**](https://github.com/Xeptix/ZPauseT7/releases/latest)
 
@@ -19,7 +21,7 @@ identical for everyone - there's no per-client state that can desync.
 - Boss fights and scripted encounters hold too
 - Players are locked and can't be hurt
 - The match clock, powerup timers, effect countdowns and bleedout all hold
-- Resumes on a 3‑2‑1 countdown with a short grace period
+- Resumes on a 3-2-1 countdown with a short grace period
 - Optional vote-to-pause, so a pause has to carry the room
 
 ---
@@ -207,7 +209,9 @@ AppData/                                drop into %localappdata%
   boiii/data/custom_scripts/zpause.gsc
 t7-compiler/                            a compiler project - build it
   gsc.conf
-  scripts/zpause/main.gsc
+  README.md
+  scripts/zbundle/zpause.gsc
+  components/zpause.json
 ```
 
 Both `Black Ops III` and `AppData` merge into folders you already have, so the whole folder
@@ -256,9 +260,14 @@ script=scripts/shared/duplicaterender_mgr.gsc
 ```
 
 That's the compiler's own default and it does nothing in zombies, which is what makes it
-safe - but it's also the slot every tutorial-following script uses, and two scripts can't
-share one. If something else already occupies it, point `gsc.conf` at another script you're
-not using and rebuild.
+safe.
+
+**Xep's other Zombies mods share this one project.** ZShare, ZStats and ZTweaks ship their
+compiler folders in the same shape, each with its own file under `scripts/zbundle/` and the
+same `gsc.conf`. Copy every mod's `t7-compiler` folder over one project and build it once:
+the compiler joins them into one script and injects it over the one stock script, so they
+all run together. Don't build them as separate projects and inject one after another - the
+second replaces the first.
 
 This is the one route not to use under a security patch - see above.
 
@@ -413,17 +422,21 @@ The same settings have a page of their own, on the Workshop build and on BOIII, 
 and T7x. On the Workshop build, load ZPause from the Mods menu; on the other three the
 installer puts the menu in the game folder's `ui_scripts`, beside the script.
 
-The host gets to it two ways, and both open the same page:
+There are two ways in, and both open the same page. ZPause's own settings are the host's, so
+on anybody else's screen they are locked; a player who is not the host uses the page for
+whatever is theirs on it, such as another Z mod's personal settings.
 
 - the zombies lobby has a **ZPAUSE SETTINGS** button, above the gum and build kit buttons;
 - the game's own pause menu has a **ZPAUSE SETTINGS** row, under RESUME GAME, during a
   match.
 
 The pause menu also has a **PAUSE GAME** row - **UNPAUSE GAME** while the game is paused -
-above that one, for the host. It presses pause exactly as the combo does, so a vote, the
-host's approval, the cooldown and `zp_max_pauses` all still have their say. With
-`zp_pause_menu` on it is not there at all: opening the menu has already pressed pause, so
-the menu is the button.
+above that one, for every player. It presses pause exactly as the combo does, so a vote, the
+host's approval, the cooldown and `zp_max_pauses` all still have their say, and
+`zp_host_only` takes it off the menu of anybody it would turn away. Everybody in a Workshop
+match has it, since everybody loads the mod; on BOIII, Ezz BOIII and T7x a player has it when
+ZPause's menu is in their own game folder. With `zp_pause_menu` on it is not there at all:
+opening the menu has already pressed pause, so the menu is the button.
 
 Solo is a special case, and the row handles it. Black Ops III stops the game by itself
 while the pause menu is open, and a ZPause pause underneath that would be one nothing could
@@ -471,6 +484,19 @@ default in one place, whichever mod owns it.
 The Workshop build draws the page over a background image of its own. BOIII, Ezz BOIII and
 T7x draw the same page over a half-transparent black panel - an image has to come out of a
 mod's fastfile, and a loose script has none.
+
+### Languages
+
+The lobby page and the **ZPAUSE SETTINGS** row in the game's own pause menu follow the language
+the game is set to: French, German, Italian, Spanish, Russian, Polish, Brazilian Portuguese,
+Japanese, Korean, Czech, and Simplified and Traditional Chinese, with English for any other. That
+holds on every route with a menu: the Workshop build, BOIII and T7x. The Workshop build also
+gives the pause banner, the HUD and the chat messages in the same languages. Dvar names and the
+values a console or the chat takes stay as they are in every language.
+
+**The translations are made by AI and may contain mistakes.** If you find one, please report
+it to Xep on the [Discord](https://discord.gg/RE85HRwYZZ), with the language and the line as it
+reads in the game.
 
 ---
 
@@ -611,7 +637,7 @@ their full name.
 | `zp_vote_no_combo` | `jump_melee` | Combo for a no vote: `jump_melee`, `crouch_use`, `crouch_frag`, `crouch_ads`, `crouch_melee`. |
 | `zp_ease` | `1` | Ease time down into the pause and back out, instead of cutting to a stop. |
 | `zp_ease_time` | `0.35` | Seconds of ramp at each end. |
-| `zp_countdown` | `3` | Seconds of 3‑2‑1 before play resumes. |
+| `zp_countdown` | `3` | Seconds of 3-2-1 before play resumes. |
 | `zp_grace` | `2` | Seconds of invulnerability after resuming. |
 | `zp_max_pauses` | `0` | How many times one match can be paused. `0` is no cap. Only a pause somebody asked for spends one - an automatic pause does not. |
 | `zp_pause_on_disconnect` | `0` | Pause when somebody drops, so whoever is left isn't overrun while they rejoin. Nothing un-pauses on its own, so `zp_max_pause_time` is the way out if they don't come back. |
@@ -778,6 +804,62 @@ for what each engine can actually do.
 ---
 
 ## Changelog
+
+### v1.7
+
+- **The t7-compiler build runs alongside Xep's other mods.** Its folder now holds
+  `scripts/zbundle/zpause.gsc` and the same `gsc.conf` ZShare, ZStats and ZTweaks ship, so
+  copying their compiler folders over one project and building it once runs them all
+  together over the one stock script.
+
+- **PAUSE GAME is every player's.** The row in the game's own pause menu was the host's
+  alone; every player has it now, and a press from anybody goes through exactly what the combo
+  does - `zp_host_only`, the vote, the host's approval and a personal pause all still decide.
+  With `zp_host_only` on, the row is not on the menu of a player it would turn away. An action
+  another Z mod adds for each player's own game, such as ZStats' HUD toggle, is on every
+  player's menu as well; one that acts on the whole match stays the host's.
+
+- **The settings menu speaks twelve languages.** The lobby page and the **ZPAUSE SETTINGS** row
+  in the game's own pause menu follow the language the game is set to: French, German, Italian, Spanish, Russian, Polish, Brazilian Portuguese, Japanese, Korean, Czech, and Simplified and Traditional Chinese,
+  with English for any other. Every setting's name, its choices, its description and the reason
+  a greyed-out row gives are translated, and so is the page around them - the tabs, the
+  buttons, the confirmations and the details panel. What you type stays as it is: dvar names,
+  and the values a console or the chat takes. The translations are made by AI and may contain
+  mistakes; please report any to Xep on the Discord. Every route with a menu: the Workshop
+  build, BOIII and T7x.
+
+- **In a bundle, every mod's settings read in that mod's own words.** ZBundle draws all of its
+  mods' categories on one screen, and each row is now translated by the mod it belongs to, so a
+  ZShare setting reads in ZShare's translation on ZPause's screen. **CHANGED** reads in the
+  same language too, with each row's mod still named in front of it.
+
+- **Holding a shoulder button or Q/E moves through the categories cleanly.** The press moves
+  one category, and holding it keeps going after a moment, in the lobby and in a match. It used
+  to share each step with the game's own tab strip, which made a held key skip a category or
+  stall.
+
+- **A choice that happens to be the default stays picked.** Stepping onto a value that is also
+  the setting's default - another mod's RANDOM, say - no longer snaps back to DEFAULT the moment
+  you land on it. Reopening the screen or resetting shows DEFAULT again.
+
+- **The screen opens on its own title**, the first category's, and a category's description
+  fits on one line.
+
+- **Action rows only act when you press them.** A, Enter or a click acts on the row the cursor
+  is on, and never on a row you had already moved away from.
+
+- **The pause names who paused.** With `zp_pause_menu room`, the pause screen named "someone"
+  instead of the players whose menus were open; it names them now.
+
+- **Two copies of ZPause loaded at once no longer split a player between them.** With the
+  Workshop build and a script route both installed, the copy that started the match now looks
+  after every player, rather than whichever reached each player first.
+
+- **A pause asked for from the pause menu is asked for once.** The host's PAUSE GAME row
+  reaches the game two ways, and both used to be served: with `zp_round_pause` on, the second
+  called off the round-end pause the first had just set up, and with `zp_personal_pause` on it
+  brought the host straight back. With `zp_host_only` and `zp_personal_pause` both on, a
+  player's PAUSE GAME row now shows exactly when their combo would pause them.
 
 ### v1.6
 

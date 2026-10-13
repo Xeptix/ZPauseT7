@@ -27,6 +27,14 @@ require( "zpausepausemenu" )
 require( "zpausesettingsdata" )
 
 local Z = CoD.ZPauseSettings
+-- ZBUNDLE_PRESENTATION_V1
+-- The shared bundle's presentation contract, carried natively: every word this
+-- renderer draws already goes through its owner's provider (Z.OwnerWords) and its
+-- own catalogs, so a bundle builder finding this marker changes nothing here. It
+-- used to add these by rewriting the shipped file, which Xep ruled out on 12
+-- October 2026: a fix lives in the owner's own seam, consumed the same way
+-- everywhere.
+Z.BundlePresentationVersion = 1
 Z.saved = {}
 Z.dirty = false
 -- Whether the save file has actually been read. Nothing is written over a
@@ -60,20 +68,42 @@ end
 -- back the key it was given when there is no such string -- so the English
 -- the table was written from is the fallback, and nobody ever reads a key.
 --
--- The chrome is English, and that is not an oversight. A key only resolves
--- where the fastfile carrying it is loaded: ZPause's strings ride in zm_mod,
--- which is a match's zone, and this menu opens in the frontend -- and on the
--- loose clients there is no fastfile at all. A key that does not resolve is
--- drawn as the key, which is exactly what the menu showed in game: rows of
--- ZPAUSE_MENU_DEFAULT under a ZPAUSE_MENU_TITLE. English every time is
--- honest, and it matches the shell the other Z mods draw.
+-- A key is looked up in the catalog the generator embedded in the data file,
+-- and falls back to the English the call site already holds.
+--
+-- It used to return the English unconditionally, and the reason it had to is
+-- the reason this route exists. A `.str` key only resolves where the fastfile
+-- carrying it is loaded: ZPause's strings ride in zm_mod, which is a match's
+-- zone, and this menu opens in the frontend -- and on the loose clients there
+-- is no fastfile at all. A key that does not resolve is drawn as the key, which
+-- is exactly what the menu showed in game: rows of ZPAUSE_MENU_DEFAULT under a
+-- ZPAUSE_MENU_TITLE. So every key in this file named something defined nowhere,
+-- and English every time was the honest answer.
+--
+-- The catalog is embedded in the shipped Lua, so it needs no fastfile and works
+-- in the frontend and on BOIII and T7x where `.str` provably cannot. This is
+-- not a second translation route beside that one: it replaces a route that
+-- could not work here. The shared translation core underneath it is vendored,
+-- pinned bytes (tools/shared_cores.py).
 --
 -- The lines players read during a match -- every zp_say, zp_say_all and
--- zp_show -- are keyed as they always were, and those do resolve, because a
--- match has zm_mod loaded.
-Z.Text = function ( key, english )
-	return english
-end
+-- zp_show -- are keyed as they always were, and those still resolve the old
+-- way, because a match has zm_mod loaded.
+-- **Z.Text is NOT defined here, and must never be.** `Z` is `CoD.ZPauseSettings`
+-- itself, and the generated data file -- which this file's require chain pulls
+-- in first -- already puts the real lookup there. A definition in this file
+-- would assign straight over it, and a body that then called
+-- `CoD.ZPauseSettings.Text` would be calling itself: every lookup recurses
+-- until the stack gives out, the pcall swallows it, and the English comes back.
+-- Compiles, passes every check, translates nothing, for ever.
+--
+-- It did exactly that for an hour, because a stub returning its English
+-- argument was the right answer here for a year and rewriting it in place
+-- looked like the smaller change. ZShare's session found the same shadowing in
+-- its own tree and said so.
+--
+-- The lookup's signature is `( key, fallback )`, which is the shape all 38 call
+-- sites below already pass, so they reach the catalog with no change.
 
 -- A word of the game's own, which every route has in every language.
 Z.Stock = function ( key, english )
@@ -89,7 +119,9 @@ Z.Stock = function ( key, english )
 end
 
 -- A line the generator gave a key as well as its English. A row somebody else
--- registered has only the English, and gets it back unchanged.
+-- registered has only the English, and gets it back unchanged -- and so does a
+-- line whose English is no longer the key's, which is what a copy re-worded
+-- from a row of ours looks like (Z.Words).
 Z.Keyed = function ( key, english, fallback )
 	if type( english ) ~= "string" or english == "" then
 		english = fallback or ""
@@ -97,7 +129,105 @@ Z.Keyed = function ( key, english, fallback )
 	if type( key ) ~= "string" or key == "" then
 		return english
 	end
-	return Z.Text( key, english )
+	return Z.Words( key, english )
+end
+
+-- The shared shell's own words: what the registry draws for every mod on the
+-- screen -- MODS, CHANGED, ON and OFF on a mod's switch, the host-lock
+-- sentences. They are translated here, where this renderer draws them, and
+-- never inside B.*: one copy of B runs for the whole screen, and it has to
+-- read the same whichever mod happened to load first. The vocabulary is a
+-- closed table the generator writes (mk_locale.SHELL); anything not in it is
+-- drawn as it came.
+Z.Shell = function ( english )
+	if type( english ) ~= "string" or english == "" then
+		return english or ""
+	end
+	local keys = Z.ShellKeys
+	if type( keys ) ~= "table" or keys[english] == nil then
+		return english
+	end
+	return Z.Words( keys[english], english )
+end
+
+-- A mod's own words through that mod's provider in the shared registry -- the
+-- kit's presentation ABI, B.Localizers.<owner>. In a bundle this renderer
+-- draws every mod's rows, and only the owner can translate its own: ZPause's
+-- catalog asked about a ZShare row answers English, and ZShare's about ours
+-- would too. A CHANGED copy names the mod it came from in sourceOwner, so it
+-- reaches that mod rather than the shell. Whatever no provider translates is
+-- offered to the shell vocabulary, and then drawn as it came.
+Z.OwnerWords = function ( english, row, tab, controller )
+	if type( english ) ~= "string" or english == "" then
+		return english or ""
+	end
+	local owner = nil
+	if type( row ) == "table" then
+		owner = row.sourceOwner or row.localizationOwner
+	end
+	if owner == nil and type( tab ) == "table" then
+		owner = tab.owner
+	end
+	owner = owner or Z.Owner
+	local providers = CoD.ZBundleSettings ~= nil and CoD.ZBundleSettings.Localizers or nil
+	local provider = type( providers ) == "table" and providers[owner] or nil
+	if type( provider ) == "table" and provider.version == 1 and type( provider.text ) == "function" then
+		local ok, said = pcall( provider.text, english,
+			{ owner = owner, row = row, tab = tab, controller = controller } )
+		if ok and type( said ) == "string" and said ~= "" and said ~= english then
+			return said
+		end
+	end
+	return Z.Shell( english )
+end
+
+-- A row's name, and the name of one of its choices, as drawn.
+Z.RowLabel = function ( row, tab, controller )
+	return Z.OwnerWords( tostring( row.label or row.dvar or "" ), row, tab, controller )
+end
+
+-- An action row's name in the game's own pause menu, by the mod that
+-- registered it. In a bundle this file draws every mod's actions, and
+-- B.ActionLabel is the registry's: one copy for the whole screen, which hands
+-- back whatever the mod registered and translates nothing.
+Z.ActionWords = function ( action, controller )
+	local english = CoD.ZBundleSettings.ActionLabel( action, controller )
+	if type( action ) ~= "table" then
+		return english
+	end
+	return Z.OwnerWords( english, action, { owner = action.owner }, controller )
+end
+
+Z.ChoiceLabel = function ( row, index, tab, controller )
+	local english = ( row.labels or {} )[index]
+	if english == nil then
+		return nil
+	end
+	return Z.OwnerWords( tostring( english ), row, tab, controller )
+end
+
+-- Whether a value text carries one of the states drawn in front of it, in
+-- English or in the language on screen: the control falls back to reading
+-- its own text where a recycled option carries no lock model.
+Z.StatePrefixed = function ( text )
+	for _, key in ipairs( { "ui.locked_value", "ui.disabled_value" } ) do
+		for _, pattern in ipairs( { Z.Source( key ), Z.Text( key, "" ) } ) do
+			if type( pattern ) == "string" and pattern ~= "" then
+				local head = string.match( pattern, "^(.-){value}" )
+				if head ~= nil and head ~= "" and string.sub( text, 1, string.len( head ) ) == head then
+					return true
+				end
+			end
+		end
+	end
+	for _, english in ipairs( { "HOST VALUE UNAVAILABLE", "HOST STATUS UNKNOWN" } ) do
+		for _, shown in ipairs( { english, Z.Shell( english ) } ) do
+			if text == shown then
+				return true
+			end
+		end
+	end
+	return false
 end
 
 -- ------------------------------------------------------------------------
@@ -145,10 +275,10 @@ end
 
 -- The label a row's own default is drawn under, so the page can say what
 -- DEFAULT currently means.
-Z.DefaultLabel = function ( row )
+Z.DefaultLabel = function ( row, tab, controller )
 	for index, value in ipairs( row.values or {} ) do
 		if Z.Same( value, row.default ) then
-			return ( row.labels or {} )[index] or value
+			return Z.ChoiceLabel( row, index, tab, controller ) or value
 		end
 	end
 	return row.default or ""
@@ -158,8 +288,8 @@ end
 -- come from the row -- tools/mk_t7_lobby.py has the table -- because the
 -- script is what decides them and a guess made here from a setting's name
 -- would be wrong the first time one moved.
-Z.Boundary = function ( row )
-	return Z.Keyed( row.boundaryKey, row.boundary, "" )
+Z.Boundary = function ( row, tab, controller )
+	return Z.OwnerWords( row.boundary or "", row, tab, controller )
 end
 
 -- What a row is waiting for, or -- when it is not waiting for anything
@@ -168,19 +298,22 @@ end
 Z.StatusText = function ( row, tab, controller )
 	local who = controller or Z.Who()
 	if CoD.ZBundleSettings.RowHostLocked ~= nil and CoD.ZBundleSettings.RowHostLocked( row, tab, who ) then
-		return "HOST CONTROLLED"
+		return Z.Text( "ui.host_controlled", "HOST CONTROLLED" )
 	end
 	if CoD.ZBundleSettings.RowForced( row, tab, who ) then
-		return "STATUS: OVERRIDDEN"
+		return Z.Text( "ui.status_overridden", "STATUS: OVERRIDDEN" )
 	end
 	if row.enabled ~= nil and not CoD.ZBundleSettings.RowEnabled( row, tab, who ) then
-		return "STATUS: DISABLED"
+		return Z.Text( "ui.status_disabled", "STATUS: DISABLED" )
 	end
-	return Z.Boundary( row )
+	return Z.Boundary( row, tab, who )
 end
 
-Z.Scope = function ( row )
-	return Z.Keyed( row.scopeKey, row.scope, Z.Text( "MENU_SCOPE_HOST", "HOST / SHARED" ) )
+Z.Scope = function ( row, tab, controller )
+	if type( row.scope ) ~= "string" or row.scope == "" then
+		return Z.Text( "ui.scope_host", "HOST / SHARED" )
+	end
+	return Z.OwnerWords( row.scope, row, tab, controller )
 end
 
 -- A report row -- somebody else's compatibility tab, say -- says what it is
@@ -247,9 +380,12 @@ Z.RowHint = function ( controller, row, tab )
 	end
 	local reason = CoD.ZBundleSettings.RowReason( row, tab, controller )
 	if reason ~= nil then
-		return reason
+		-- A row's own reason is its owner's words; a host lock is the shell's.
+		return Z.OwnerWords( reason, row, tab, controller )
 	end
-	return row.hint or ""
+	-- No "Default: X." to compose here: this port's page has a field of its own
+	-- for the default, and reading it twice is worse than not at all.
+	return Z.OwnerWords( row.hint or "", row, tab, controller )
 end
 
 -- ------------------------------------------------------------------------
@@ -1549,7 +1685,7 @@ B.RegisterComponent( {
 	label = "ZPause",
 	version = Z.Version,
 	order = 100,
-	description = "The synced co-op pause: the combos, the chat words, voting, and what a pause freezes.",
+	description = Z.Text( "ui.component_hint", "The synced co-op pause: the combos, the chat words, voting, and what a pause freezes." ),
 	boundary = "NEXT MATCH",
 	getEnabled = function ()
 		local value = Z.Get( "zp_enabled" )
@@ -1592,18 +1728,28 @@ if B.TabById["zbundle_changed"] == nil then
 							for key, value in pairs( row ) do
 								copy[key] = value
 							end
+							-- Its words are composed here, so they are translated here, each part
+							-- by the mod the row belongs to. Every key comes off the copy: a key
+							-- left on a row whose words have changed draws the row it was copied
+							-- from -- its first choice for the value, its bare name without the
+							-- owner in front. sourceOwner says whose it is, so whichever renderer
+							-- draws it reaches that mod's provider rather than the shell's.
 							local label = string.upper( tostring( current ) )
 							for index, value in ipairs( row.values or {} ) do
 								if Z.Same( current, value ) then
-									label = ( row.labels or {} )[index] or label
+									label = Z.ChoiceLabel( row, index, tab ) or label
 									break
 								end
 							end
-							copy.label = string.upper( tostring( tab.ownerLabel or tab.owner or "MOD" ) )
-								.. " - " .. tostring( row.label or row.dvar )
-							copy.hint = tostring( row.hint or "" )
-								.. "  Set on " .. tostring( tab.ownerLabel or tab.owner or "this mod" )
-								.. "'s own category, which is where it can be changed."
+							local owner = tostring( tab.ownerLabel or tab.owner or "MOD" )
+							local note = Z.OwnerWords( "Set on {owner}'s own category, which is where it can be changed.", row, tab )
+							note = string.gsub( note, "{owner}", function () return owner end )
+							copy.label = string.upper( owner ) .. " - " .. Z.RowLabel( row, tab )
+							copy.hint = Z.OwnerWords( tostring( row.hint or "" ), row, tab ) .. "  " .. note
+							copy.sourceOwner = tab.owner
+							copy.labelKey, copy.hintKey, copy.choiceKeys = nil, nil, nil
+							-- Never translated: B.RowWritable reads this exact string as the mark
+							-- of a row nobody may write. It is translated where it is drawn.
 							copy.boundary = "READ ONLY"
 							copy.boundaryKey = nil
 							copy.default = current
@@ -1666,8 +1812,10 @@ B.ModsTab = B.ModsTab or {
 -- it in at the same door the chat words and the button combo use, so the
 -- vote, the cooldown and zp_max_pauses all still have their say.
 --
--- The host's, and only the host's: every setting behind the row is one of
--- the host's dvars, and the script turns away anybody else's press.
+-- Every player's, since 1.7 (Xep, 11 October 2026): the row is the combo on
+-- a menu, and a press from anybody goes through the combo's gates in the
+-- script - zp_host_only included, which also takes the row off the screen of
+-- a player it would turn away.
 -- ------------------------------------------------------------------------
 
 CoD.ZPauseAPI = CoD.ZPauseAPI or {}
@@ -1675,25 +1823,116 @@ local A = CoD.ZPauseAPI
 
 A.MENU = "zpause"
 
--- Whether there is a game to pause. The script publishes zp_ui_active for
--- exactly this: ZPause installed, switched on, and running in this match.
-A.IsAvailable = function ()
-	if not CoD.isZombie or Z.Get( "zp_ui_active" ) ~= "1" then
+-- What the server last told this player, for a game that is not the server.
+-- The dvars the script publishes are the host's own -- the host's client is
+-- the host's server -- so a client reads nothing there. zpause.gsc tells
+-- every player instead (zp_ui_tell), as a script notify named zpause_state
+-- carrying four numbers: running, paused for this player, the menu is the
+-- pause, and whether zp_host_only leaves them a pause to ask for. Sent when it
+-- changes and every two seconds, so a state older than twenty is one nobody
+-- is sending any more: the match ended without saying so, or this is another
+-- match, and ZPause may not be in it.
+A.STATE_EVENT = "zpause_state"
+A.STATE_FRESH = 20000
+
+A.Now = function ()
+	local ok, now = pcall( Engine.milliseconds )
+	if ok and type( now ) == "number" then
+		return now
+	end
+	ok, now = pcall( Engine.CurrentGameTime )
+	if ok and type( now ) == "number" then
+		return now
+	end
+	return nil
+end
+
+A.TakeState = function ( data )
+	if type( data ) ~= "table" then
+		return
+	end
+	Z.ClientState = {
+		active = tonumber( data[1] ) == 1,
+		paused = tonumber( data[2] ) == 1,
+		menuPause = tonumber( data[3] ) == 1,
+		allowed = tonumber( data[4] ) == 1,
+		at = A.Now()
+	}
+end
+
+A.State = function ()
+	local state = Z.ClientState
+	if type( state ) ~= "table" or not state.active then
+		return nil
+	end
+	local now = A.Now()
+	if now == nil or state.at == nil or now < state.at or now - state.at > A.STATE_FRESH then
+		return nil
+	end
+	return state
+end
+
+-- Once, on the root, for the primary controller: the notify arrives whether or
+-- not a menu is open, and the pause menu reads the last one when it builds.
+A.WatchState = function ()
+	if CoD.ZPauseStateWatching then
+		return true
+	end
+	if LUI.roots == nil or LUI.roots.UIRootFull == nil then
 		return false
 	end
-	-- With zp_pause_menu on, opening this menu was the pause: the row would
-	-- have read PAUSE GAME a moment before the game paused, and pressing it
-	-- would resume. The menu is the button there.
-	if Z.Get( "zp_ui_menu_pause" ) == "1" then
+	local ok, controller = pcall( Engine.GetPrimaryController )
+	if not ok or type( controller ) ~= "number" then
 		return false
 	end
+	local watching = pcall( function ()
+		LUI.roots.UIRootFull:subscribeToGlobalModel( controller, "PerController", "scriptNotify", function ( model )
+			if type( IsParamModelEqualToString ) ~= "function" or not IsParamModelEqualToString( model, A.STATE_EVENT ) then
+				return
+			end
+			if type( CoD.GetScriptNotifyData ) == "function" then
+				A.TakeState( CoD.GetScriptNotifyData( model ) )
+			end
+		end )
+	end )
+	CoD.ZPauseStateWatching = watching
+	return watching
+end
+
+A.IsHost = function ()
 	local ok, host = pcall( Engine.IsLobbyHost, Enum.LobbyType.LOBBY_TYPE_GAME )
 	return ok and host == true
 end
 
-A.IsPaused = function ()
-	return Z.Get( "zp_ui_paused" ) == "1"
+-- Whether there is a game to pause. For the host the script publishes
+-- zp_ui_active for exactly this: ZPause installed, switched on, and running in
+-- this match. For anybody else it is the state above.
+A.IsAvailable = function ()
+	if not CoD.isZombie then
+		return false
+	end
+	if A.IsHost() then
+		if Z.Get( "zp_ui_active" ) ~= "1" then
+			return false
+		end
+		-- With zp_pause_menu on, opening this menu was the pause: the row
+		-- would have read PAUSE GAME a moment before the game paused, and
+		-- pressing it would resume. The menu is the button there.
+		return Z.Get( "zp_ui_menu_pause" ) ~= "1"
+	end
+	local state = A.State()
+	return state ~= nil and state.allowed and not state.menuPause
 end
+
+A.IsPaused = function ()
+	if A.IsHost() then
+		return Z.Get( "zp_ui_paused" ) == "1"
+	end
+	local state = A.State()
+	return state ~= nil and state.paused
+end
+
+A.WatchState()
 
 -- A press, sent twice on purpose. The menu response is the road the pause
 -- menu already reports itself on; the request dvar is the one the public API
@@ -1751,13 +1990,15 @@ B.RegisterAction( {
 	owner = Z.Owner,
 	ownerLabel = "ZPause",
 	order = 10,
+	-- Every player's: the script puts a press through the combo's gates.
+	authority = "player",
 	label = function ()
 		if A.IsPaused() then
-			return "UNPAUSE GAME"
+			return Z.Text( "ui.unpause_game", "UNPAUSE GAME" )
 		end
-		return "PAUSE GAME"
+		return Z.Text( "ui.pause_game", "PAUSE GAME" )
 	end,
-	hint = "Pause the game for everybody, the same as the pause combo does.",
+	hint = Z.Text( "ui.pause_game_hint", "Pause the game for everybody, the same as the pause combo does." ),
 	visible = function ()
 		return A.IsAvailable()
 	end,
@@ -1774,20 +2015,31 @@ B.RegisterAction( {
 B.SettingsRowOwner = B.SettingsRowOwner or Z.Owner
 B.ActionRowsOwner = B.ActionRowsOwner or Z.Owner
 
+-- "zbundle" is the bundle's own claim: an aggregate's loader takes both rows for
+-- the whole screen before any mod loads, and this renderer is the one that draws
+-- them there, so it answers to that name as well as its own.
 Z.DrawsSettingsRow = function ()
-	return B.SettingsRowOwner == Z.Owner
+	return B.SettingsRowOwner == Z.Owner or B.SettingsRowOwner == "zbundle"
 end
 
 Z.DrawsActionRows = function ()
-	return B.ActionRowsOwner == Z.Owner
+	return B.ActionRowsOwner == Z.Owner or B.ActionRowsOwner == "zbundle"
 end
 
 Z.TabLabel = function ( tab )
-	return Z.Keyed( tab.labelKey, tab.labelText or tab.label, tab.id )
+	local english = tab.labelText or tab.label
+	if type( english ) ~= "string" or english == "" then
+		english = tostring( tab.id or "" )
+	end
+	return Z.OwnerWords( english, nil, tab )
 end
 
 Z.TabHint = function ( tab )
-	return Z.Keyed( tab.hintKey, tab.hintText or tab.hint, "" )
+	local english = tab.hintText or tab.hint
+	if type( english ) ~= "string" then
+		english = ""
+	end
+	return Z.OwnerWords( english, nil, tab )
 end
 
 Z.TabRows = function ( tab )
@@ -1970,7 +2222,7 @@ end
 -- ------------------------------------------------------------------------
 
 Z.Title = function ()
-	return Z.Text( "MENU_TITLE", "ZPAUSE SETTINGS" )
+	return Z.Text( "ui.title", "ZPAUSE SETTINGS" )
 end
 
 -- ZPause's own name while ZPause is all there is on the page, and the
@@ -1979,11 +2231,11 @@ end
 -- from this as well -- one screen, one name, wherever it is opened from.
 Z.MenuTitle = function ( tabs )
 	if B.IsBundle() then
-		return "ZBUNDLE SETTINGS"
+		return Z.Text( "ui.bundle_title", "ZBUNDLE SETTINGS" )
 	end
 	for _, tab in ipairs( tabs or {} ) do
 		if tab.owner ~= Z.Owner and tab.owner ~= "zbundle" then
-			return "ZBUNDLE SETTINGS"
+			return Z.Text( "ui.bundle_title", "ZBUNDLE SETTINGS" )
 		end
 	end
 	return Z.Title()
@@ -2005,10 +2257,10 @@ Z.TabTitle = function ( tab, tabs )
 		return title
 	end
 	if tab.role == "mods" then
-		return title .. " - MODS"
+		return title .. " - " .. Z.Shell( "MODS" )
 	end
 	if tab.role == "changed" then
-		return title .. " - CHANGED"
+		return title .. " - " .. Z.Shell( "CHANGED" )
 	end
 	return title .. " - " .. string.upper( Z.OwnerLabel( tab ) )
 end
@@ -2084,6 +2336,33 @@ Z.RowGet = function ( row, tab )
 	return Z.Get( row.dvar )
 end
 
+-- An action row is a button: it holds no value, so it reads as empty and
+-- counts as at its default -- never in CHANGED, never written by a reset, and
+-- its owner's getter is never asked for a setting it does not have. Wrapped
+-- around the two rather than written into them, and announced by
+-- Z.NativeButtonRowSeam, so a bundle builder that still adds the same guard
+-- finds its anchors and can switch to requiring this instead.
+Z.NativeButtonRowSeam = 1
+do
+	local rowGet, isDefault = Z.RowGet, Z.IsDefault
+	-- Named locals, so the two definitions above stay the only lines that
+	-- spell either header: the builder that patches them counts its anchors.
+	local function buttonRead ( row, tab )
+		if row ~= nil and row.kind == "button" then
+			return ""
+		end
+		return rowGet( row, tab )
+	end
+	local function buttonIsDefault ( current, row )
+		if row ~= nil and row.kind == "button" then
+			return true
+		end
+		return isDefault( current, row )
+	end
+	Z.RowGet = buttonRead
+	Z.IsDefault = buttonIsDefault
+end
+
 -- The one way a value is written, whoever owns it.
 Z.Apply = function ( controller, tab, row, value )
 	if tab ~= nil and type( tab.set ) == "function" then
@@ -2101,12 +2380,62 @@ end
 -- page opens, as the cursor moves onto the row, and as left or right moves
 -- the choice. Only a move to a different value is a change, so opening a
 -- page, scrolling it or hovering a row never writes anything.
+-- The choice last put under the cursor on each row, for this session only.
+-- A value equal to the row's default reads as DEFAULT everywhere else -- that
+-- is what keeps an untouched row saying DEFAULT after a match has written
+-- every default into its dvar -- but the selector itself has to stay on the
+-- value the player moved to, or stepping across it snaps back to DEFAULT.
+Z.Picked = Z.Picked or {}
+
+Z.PickedKey = function ( row, tab )
+	return tostring( tab ~= nil and tab.owner or "" ) .. "|" .. tostring( row.dvar or row.key or "" )
+end
+
+-- What was picked, and what the row read straight after the write. The second
+-- is what the choice is matched against: an owner may store the default-equal
+-- value as empty, or apply it a frame later, and the value picked is then not
+-- what reads back.
+Z.SetPicked = function ( row, tab, value, observed )
+	if row == nil then return end
+	Z.Picked[Z.PickedKey( row, tab )] = { value = value, observed = observed }
+end
+
+-- Forgotten when the menu opens and on every reset: a new screen, and a row
+-- put back to DEFAULT, show DEFAULT again.
+Z.ClearPicked = function ()
+	Z.Picked = {}
+end
+
+-- True when the selector should rest on DEFAULT rather than on the value.
+Z.ShowsDefault = function ( current, row, tab )
+	local key = Z.PickedKey( row, tab )
+	local picked = Z.Picked[key]
+	-- The row has moved since, by somebody else or a reset: the pick no longer
+	-- describes it, and is dropped whatever the row now reads.
+	if picked ~= nil and not ( Z.Same( current, picked.observed ) or Z.Same( current, picked.value ) ) then
+		Z.Picked[key] = nil
+		picked = nil
+	end
+	if not Z.IsDefault( current, row ) then
+		return false
+	end
+	if picked == nil then
+		return true
+	end
+	return picked.value == nil or picked.value == ""
+end
+
 Z.Chosen = function ( self, element, controller, param, menu )
 	local row = param.row or param
 	local tab = param.tab
 	if not Z.Writable( row, tab, controller ) then return end
 	UpdateInfoModels( element )
+	-- Which choice is under the cursor, DEFAULT or a value, so the rebuild
+	-- that follows keeps it there: a value that happens to equal the row's
+	-- default would otherwise come back as DEFAULT.
+	local picked = element.default == true and "" or element.value
 	local current = Z.RowGet( row, tab )
+	Z.SetPicked( row, tab, picked, current )
 	if element.default == true then
 		if Z.IsDefault( current, row ) then
 			return
@@ -2115,6 +2444,7 @@ Z.Chosen = function ( self, element, controller, param, menu )
 		return
 	end
 	Z.Apply( controller, tab, row, element.value )
+	Z.SetPicked( row, tab, picked, Z.RowGet( row, tab ) )
 
 	-- Anything that got this far is a real write: hovering a row and
 	-- stopping on the value it already had both returned above.
@@ -2196,7 +2526,7 @@ Z.ToggleChangedFilter = function ( controller, menu )
 	Z.BuildRows( menu.zpSource, rows, tab, controller )
 	menu.Options:setDataSource( menu.zpSource )
 	menu.Subtitle:setText( Z.TabHint( tab )
-		.. ( menu.zpChangedOnly and "  " .. Z.Text( "MENU_FILTER_CHANGED_ON", "FILTER: CHANGED" ) or "" ) )
+		.. ( menu.zpChangedOnly and "  " .. Z.Text( "ui.filter_changed_on", "FILTER: CHANGED" ) or "" ) )
 	Z.SyncScrollbar( menu )
 	if #rows == 0 then
 		Z.ShowEmpty( menu )
@@ -2275,10 +2605,14 @@ Z.ButtonRowAt = function ( menu, controller, control )
 			return false
 		end
 	else
+		-- The row that has focus now, and nothing else: an old list
+		-- selection is not a press on anything, and firing it ran an action
+		-- the player was no longer on.
 		local active = menu.Options.activeWidget
-		index = active ~= nil and active.gridInfoTable ~= nil
-			and active.gridInfoTable.zeroBasedIndex
-			or menu.Options.savedActiveIndex or 0
+		if active == nil or active.gridInfoTable == nil or active.gridInfoTable.zeroBasedIndex == nil then
+			return false
+		end
+		index = active.gridInfoTable.zeroBasedIndex
 	end
 	local row = ( menu.zpRows or {} )[index + 1]
 	if row == nil or row.kind ~= "button" then
@@ -2306,11 +2640,11 @@ end
 -- the opposite of what is true.
 Z.DetailsValue = function ( row, tab, controller )
 	if row == nil then
-		return "", Z.Text( "MENU_DEFAULT", "DEFAULT" )
+		return "", Z.Text( "ui.default", "DEFAULT" )
 	end
 	local hostValue = B.RowHostValue ~= nil and B.RowHostValue( row, tab, controller ) or nil
 	if hostValue ~= nil then
-		return hostValue, Z.Text( "MENU_HOST", "HOST" )
+		return Z.Shell( hostValue ), Z.Text( "ui.host", "HOST" )
 	end
 	-- RowOverride gives value first, locked second. RowForced gives them the
 	-- other way round; reading either in the wrong order is how a forced row
@@ -2320,24 +2654,24 @@ Z.DetailsValue = function ( row, tab, controller )
 		forced, locked = B.RowOverride( row, tab, controller )
 	end
 	if locked then
-		return Z.ValueLabel( row, forced ), Z.Text( "MENU_FORCED", "FORCED" )
+		return Z.ValueLabel( row, forced, tab, controller ), Z.Text( "ui.forced", "FORCED" )
 	end
 	if B.RowWritable ~= nil and not B.RowWritable( row, tab, controller )
 		and #( row.values or {} ) > 0 then
-		return Z.ValueLabel( row, Z.RowGet( row, tab ) ), Z.Text( "MENU_CURRENT", "CURRENT" )
+		return Z.ValueLabel( row, Z.RowGet( row, tab ), tab, controller ), Z.Text( "ui.current", "CURRENT" )
 	end
-	return Z.DefaultLabel( row ), Z.Text( "MENU_DEFAULT", "DEFAULT" )
+	return Z.DefaultLabel( row, tab, controller ), Z.Text( "ui.default", "DEFAULT" )
 end
 
 -- A value as the row writes it, rather than as it is stored. An empty one is
 -- the default, which has a label of its own.
-Z.ValueLabel = function ( row, value )
+Z.ValueLabel = function ( row, value, tab, controller )
 	if value == nil or value == "" then
-		return Z.DefaultLabel( row )
+		return Z.DefaultLabel( row, tab, controller )
 	end
 	for index, listed in ipairs( row.values or {} ) do
 		if Z.Same( listed, value ) then
-			return ( row.labels or {} )[index] or string.upper( tostring( listed ) )
+			return Z.ChoiceLabel( row, index, tab, controller ) or string.upper( tostring( listed ) )
 		end
 	end
 	return string.upper( tostring( value ) )
@@ -2373,7 +2707,7 @@ Z.Row = function ( row, source, tab, controller )
 			local offNow = B.RowUnavailable( row, tab, who )
 			table.insert( options, {
 				models = {
-					text = "ACTIVATE",
+					text = Z.Text( "ui.activate", "ACTIVATE" ),
 					-- A button nobody here may press reads as one of the
 					-- greyed rows rather than as a live one that does
 					-- nothing when it is pressed.
@@ -2424,7 +2758,7 @@ Z.Row = function ( row, source, tab, controller )
 			for index, value in ipairs( row.values or {} ) do
 				table.insert( options, {
 					models = {
-						text = ( row.labels or {} )[index] or string.upper( tostring( value ) ),
+						text = Z.ChoiceLabel( row, index, tab, who ) or string.upper( tostring( value ) ),
 						zbRowState = "",
 						zbOptionLocked = false
 					},
@@ -2437,10 +2771,10 @@ Z.Row = function ( row, source, tab, controller )
 						action = Z.Chosen,
 						selectIndex = Z.Same( live, value ),
 						loopEdges = true,
-						defaultText = Z.ValueLabel( row, live ),
-						defaultCaption = Z.Text( "MENU_CURRENT", "CURRENT" ),
+						defaultText = Z.ValueLabel( row, live, tab, who ),
+						defaultCaption = Z.Text( "ui.current", "CURRENT" ),
 						boundaryText = Z.StatusText( row, tab, who ),
-						scopeText = Z.Scope( row ),
+						scopeText = Z.Scope( row, tab, who ),
 						dvarText = row.dvar or ""
 					}
 				} )
@@ -2510,16 +2844,20 @@ Z.Row = function ( row, source, tab, controller )
 				held = forced
 			end
 
+			-- Only a bare value is upper-cased. Words have already been through
+			-- their owner's provider and are uppercase in every language, and
+			-- string.upper works on bytes: under a C runtime locale that is not
+			-- "C" it rewrites UTF-8 - VERFÜGBAR came out VERFÌGBAR.
 			local hostValue = B.RowHostValue ~= nil and B.RowHostValue( row, tab, who ) or nil
-			local shown = hostValue or held
+			local shown = hostValue ~= nil and Z.Shell( hostValue ) or string.upper( tostring( held ) )
 			if hostValue ~= nil then
 				-- A local saved preference is not evidence of the host's live value.
 			elseif not locked and atDefault then
-				shown = Z.DefaultLabel( row )
+				shown = Z.DefaultLabel( row, tab, who )
 			else
 				for index, value in ipairs( row.values or {} ) do
 					if Z.Same( held, value ) then
-						shown = ( row.labels or {} )[index] or value
+						shown = Z.ChoiceLabel( row, index, tab, who ) or string.upper( tostring( value ) )
 						break
 					end
 				end
@@ -2528,12 +2866,12 @@ Z.Row = function ( row, source, tab, controller )
 			-- Which of the three it is, said on the row itself, since the
 			-- arrows are gone and one value on its own reads as a setting
 			-- that simply has one.
-			shown = string.upper( tostring( shown ) )
+			shown = tostring( shown )
 			if hostValue ~= nil then
 			elseif locked then
-				shown = "LOCKED: " .. shown
+				shown = Z.Format( "ui.locked_value", "LOCKED: {value}", { value = shown } )
 			elseif row.disabledReason ~= nil or row.enabled ~= nil then
-				shown = "DISABLED: " .. shown
+				shown = Z.Format( "ui.disabled_value", "DISABLED: {value}", { value = shown } )
 			end
 
 			add( shown, held, hostValue == nil and not locked and atDefault, true )
@@ -2555,13 +2893,14 @@ Z.Row = function ( row, source, tab, controller )
 		-- DEFAULT (now on) and ON, with no way to turn voting off. DEFAULT
 		-- still saves nothing and still follows whatever the script
 		-- carries.
-		add( Z.Text( "MENU_DEFAULT", "DEFAULT" ), "", true, atDefault )
+		local onDefault = Z.ShowsDefault( current, row, tab )
+		add( Z.Text( "ui.default", "DEFAULT" ), "", true, onDefault )
 		for index, value in ipairs( row.values or {} ) do
 			if not listed and row.kind == "number" and tonumber( current ) ~= nil and tonumber( current ) < tonumber( value ) then
 				add( current, current, false, true )
 				listed = true
 			end
-			add( ( row.labels or {} )[index] or value, value, false, not atDefault and Z.Same( current, value ) )
+			add( Z.ChoiceLabel( row, index, tab, who ) or value, value, false, not onDefault and Z.Same( current, value ) )
 		end
 		if not listed then
 			add( string.upper( current ), current, false, true )
@@ -2575,7 +2914,7 @@ Z.Row = function ( row, source, tab, controller )
 	local who = controller or Z.Who()
 	return {
 		models = {
-			name = row.label or row.dvar or "",
+			name = Z.RowLabel( row, tab, who ),
 			dvarText = row.dvar or "",
 			desc = Z.RowHint( who, row, tab ) or "",
 			defaultText = ( Z.DetailsValue( row, tab, who ) ),
@@ -2586,7 +2925,7 @@ Z.Row = function ( row, source, tab, controller )
 			-- the wrong thing.
 			defaultCaption = select( 2, Z.DetailsValue( row, tab, who ) ),
 			boundaryText = Z.StatusText( row, tab, who ),
-			scopeText = Z.Scope( row ),
+			scopeText = Z.Scope( row, tab, who ),
 			optionsDatasource = source
 		},
 		properties = {}
@@ -2615,22 +2954,11 @@ end
 -- this stops when the page has actually moved rather than after one press.
 Z.NavigateTab = function ( menu, tabs, controller, direction )
 	if menu == nil or tabs == nil or tabs.grid == nil then
-		return
-	end
-	-- While a bumper or Q/E is held down, the press itself is the first step
-	-- and everything after it belongs to the repeat timer. Without this the
-	-- engine's own key repeat moves the strip as well as ours, at its rate
-	-- rather than at the one below.
-	if menu.zpTabHoldSource ~= nil then
-		if menu.zpTabHoldFirstStep then
-			menu.zpTabHoldFirstStep = nil
-		elseif not menu.zpTabHoldStepping then
-			return
-		end
+		return false
 	end
 	local target = Z.AdjacentTabIndex( menu.zpTabs, menu.zpTabId, direction, controller )
 	if target == nil then
-		return
+		return false
 	end
 	-- Going round the end of the strip. The grid stops at its last cell and
 	-- navigateItemLeft/Right will not take it further, so the far category
@@ -2638,7 +2966,7 @@ Z.NavigateTab = function ( menu, tabs, controller, direction )
 	local current = Z.FindTabIndex( menu.zpTabs, menu.zpTabId )
 	if ( direction < 0 and target > current ) or ( direction > 0 and target < current ) then
 		Z.RefreshTabs( menu, controller, menu.zpTabs[target].id )
-		return
+		return true
 	end
 	local id = menu.zpTabs[target].id
 	for _ = 1, #menu.zpTabs do
@@ -2648,9 +2976,10 @@ Z.NavigateTab = function ( menu, tabs, controller, direction )
 			tabs.grid:navigateItemRight()
 		end
 		if menu.zpTabId == id then
-			return
+			return true
 		end
 	end
+	return false
 end
 
 Z.BuildTabs = function ( name, tabs, selected, controller )
@@ -2746,16 +3075,16 @@ Z.UpdateTabNavigation = function ( menu, id, controller )
 	end
 	if menu.TabPrevious ~= nil then
 		menu.TabPrevious:setText( hasPrevious
-			and "<  " .. Z.Text( "MENU_PREV", "PREV" ) .. ": " .. Z.TabLabel( menu.zpTabs[previousIndex] )
+			and "<  " .. Z.Text( "ui.prev", "PREV" ) .. ": " .. Z.TabLabel( menu.zpTabs[previousIndex] )
 			or "" )
 	end
 	if menu.TabNext ~= nil then
 		menu.TabNext:setText( hasNext
-			and Z.Text( "MENU_NEXT", "NEXT" ) .. ": " .. Z.TabLabel( menu.zpTabs[nextIndex] ) .. "  >"
+			and Z.Text( "ui.next", "NEXT" ) .. ": " .. Z.TabLabel( menu.zpTabs[nextIndex] ) .. "  >"
 			or "" )
 	end
 	if menu.TabPosition ~= nil then
-		menu.TabPosition:setText( Z.Text( "MENU_CATEGORY", "CATEGORY" ) .. " "
+		menu.TabPosition:setText( Z.Text( "ui.category", "CATEGORY" ) .. " "
 			.. tostring( index ) .. " / " .. tostring( count ) )
 	end
 end
@@ -2806,100 +3135,150 @@ end
 
 -- Hold a bumper, or Q or E, and the strip keeps going.
 --
--- A tap is one category, which is the press itself. Holding waits 350 ms and
--- then repeats every 225 ms -- long enough that a tap is never two, short
--- enough that fifteen categories is a hold rather than fifteen presses.
+-- This page owns every step of the strip: the press itself is the first, then
+-- 350 ms, then one every 225 ms until the key comes up -- long enough that a
+-- tap is never two, short enough that fifteen categories is a hold rather than
+-- fifteen presses. The stock tab list is told not to navigate, the LB/RB
+-- callbacks are inert, and the four inputs that move it are read where a
+-- key-down and a key-up can be told apart. It is the Z mods' shared menu kit's
+-- route, the one Xep confirmed on 12 October 2026: the one before it let the
+-- stock strip take the first step and this page the rest, and two owners of
+-- one strip is how a held key came to skip a category or stall.
 Z.StopTabHold = function ( menu )
 	if menu == nil then
 		return
 	end
 	menu.zpTabHoldSource = nil
 	menu.zpTabHoldDirection = nil
-	menu.zpTabHoldRawKey = nil
-	menu.zpTabHoldFirstStep = nil
-	menu.zpTabHoldStepping = nil
-	if menu.zpTabHoldDelay ~= nil then
-		menu.zpTabHoldDelay:close()
-		menu.zpTabHoldDelay = nil
+	menu.zpTabHoldEpoch = ( menu.zpTabHoldEpoch or 0 ) + 1
+	if menu.zpTabHoldTimer ~= nil then
+		pcall( menu.zpTabHoldTimer.close, menu.zpTabHoldTimer )
+		menu.zpTabHoldTimer = nil
 	end
-	if menu.zpTabHoldRepeat ~= nil then
-		menu.zpTabHoldRepeat:close()
-		menu.zpTabHoldRepeat = nil
+end
+
+Z.TabHoldBlocked = function ( menu )
+	return menu == nil or menu.occludedBy ~= nil
+end
+
+-- One timer at a time, armed again after each step rather than left
+-- repeating, so a step that rebuilt the strip has finished before the next.
+Z.TabHoldSchedule = function ( menu, epoch, delay, controller, direction )
+	local ok, timer = pcall( LUI.UITimer.newElementTimer, delay, true, function ()
+		menu.zpTabHoldTimer = nil
+		if menu.zpTabHoldEpoch ~= epoch or menu.zpTabHoldSource == nil then
+			return
+		end
+		if Z.TabHoldBlocked( menu ) or not Z.NavigateTab( menu, menu.Tabs, controller, direction ) then
+			Z.StopTabHold( menu )
+			return
+		end
+		if menu.zpTabHoldEpoch == epoch then
+			Z.TabHoldSchedule( menu, epoch, 225, controller, direction )
+		end
+	end )
+	if ok and timer ~= nil then
+		menu.zpTabHoldTimer = timer
+		menu:addElement( timer )
+	else
+		Z.StopTabHold( menu )
 	end
 end
 
 Z.StartTabHold = function ( menu, controller, direction, source )
-	if menu == nil then
+	if menu == nil or Z.TabHoldBlocked( menu ) then
 		return
 	end
 	if menu.zpTabHoldSource == source and menu.zpTabHoldDirection == direction then
 		return
 	end
 	Z.StopTabHold( menu )
-	-- Nowhere to go is nothing to hold.
-	if Z.AdjacentTabIndex( menu.zpTabs, menu.zpTabId, direction, controller ) == nil then
-		return
-	end
 	menu.zpTabHoldSource = source
 	menu.zpTabHoldDirection = direction
-	menu.zpTabHoldFirstStep = true
-
-	local step = function ()
-		if menu.zpTabHoldSource ~= source or menu.occludedBy ~= nil then
-			Z.StopTabHold( menu )
-			return
-		end
-		menu.zpTabHoldStepping = true
-		Z.NavigateTab( menu, menu.Tabs, controller, direction )
-		menu.zpTabHoldStepping = nil
+	local epoch = menu.zpTabHoldEpoch
+	-- The press is the first step.
+	local moved = Z.NavigateTab( menu, menu.Tabs, controller, direction )
+	if menu.zpTabHoldEpoch ~= epoch then
+		return
 	end
+	if not moved or Z.TabHoldBlocked( menu ) then
+		Z.StopTabHold( menu )
+		return
+	end
+	Z.TabHoldSchedule( menu, epoch, 350, controller, direction )
+end
 
-	local ok, delay = pcall( LUI.UITimer.newElementTimer, 350, true, function ()
-		menu.zpTabHoldDelay = nil
-		if menu.zpTabHoldSource ~= source then
-			return
+-- One edge state per input, merging the two roads it arrives on: the raw
+-- gamepad_button event and the input's model. A real raw release wins, so a
+-- model still reading down afterwards cannot start the hold again.
+Z.TabHoldEdge = function ( menu, controller, source, direction, route, down )
+	if menu == nil or type( down ) ~= "boolean" then
+		return
+	end
+	menu.zpTabEdges = menu.zpTabEdges or {}
+	local state = menu.zpTabEdges[source]
+	if state == nil then
+		state = {}
+		menu.zpTabEdges[source] = state
+	end
+	if state[route] == down then
+		return
+	end
+	state[route] = down
+	if route == "raw" then
+		state.rawSeen = down
+	end
+	if not down and ( route == "raw" or not state.rawSeen ) then
+		state.pressed = false
+		if menu.zpTabHoldSource == source then
+			Z.StopTabHold( menu )
 		end
-		step()
-		local repeatOk, repeater = pcall( LUI.UITimer.newElementTimer, 225, false, step )
-		if repeatOk and repeater ~= nil then
-			menu.zpTabHoldRepeat = repeater
-			menu:addElement( repeater )
-		end
-	end )
-	if ok and delay ~= nil then
-		menu.zpTabHoldDelay = delay
-		menu:addElement( delay )
+	elseif down and not state.pressed then
+		state.pressed = true
+		Z.StartTabHold( menu, controller, direction, source )
 	end
 end
 
--- Black Ops III hands a PC shortcut over twice: once as KeyPressBits, which
--- is where a key-down and a key-up can be told apart, and once as
--- gamepad_button. Stock HandleButtonPress clears the KeyPressBits model to
--- zero as it consumes a press -- that is an acknowledgement, not the key
--- coming up -- so a held Q would read as released the instant it was acted
--- on. This leaves the two keys this page watches latched until the engine
--- publishes the real release.
+Z.TabHoldSources = {
+	Q = -1,
+	E = 1,
+	LB = -1,
+	RB = 1
+}
+
+-- Stock HandleButtonPress runs a key's callbacks and then clears its model to
+-- zero -- an acknowledgement, not the key coming up -- so a held Q read as
+-- released the instant it was acted on, and the stock tab list's own callback
+-- took a step of its own. For this page's four strip inputs it only reads the
+-- model: the step is this page's, and the model keeps the real state.
 Z.InstallHeldShortcutBitGuard = function ()
 	if CoD.Menu == nil or type( CoD.Menu.HandleButtonPress ) ~= "function"
 		or Z.HeldShortcutHandler == CoD.Menu.HandleButtonPress then
 		return
 	end
 	local inherited = CoD.Menu.HandleButtonPress
-	local wrapped = function ( menu, controller, button, model )
-		local keys = menu ~= nil and menu.zpHeldShortcutModels or nil
-		if keys == nil or ( model ~= keys.Q and model ~= keys.E )
-			or not ( Engine.IsControllerBeingUsed( controller ) or menu.unusedControllerAllowed ) then
-			return inherited( menu, controller, button, model )
+	local wrapped = function ( menu, controller, button, model, ... )
+		local models = menu ~= nil and menu.zpHeldShortcutModels or nil
+		local source = models ~= nil and models[model] or nil
+		if source == nil then
+			return inherited( menu, controller, button, model, ... )
 		end
-		local callbacks = menu:GetElementAndFunctionTableForButton( button, "buttonFunctions" )
-		for _, callback in ipairs( callbacks ) do
-			if callback.fn( callback.element, menu, controller, model ) then
-				break
-			end
-		end
+		Z.TabHoldModel( menu, controller, source, model )
 	end
 	Z.HeldShortcutHandler = wrapped
 	CoD.Menu.HandleButtonPress = wrapped
+end
+
+Z.TabHoldModel = function ( menu, controller, source, model )
+	local usable = Engine.IsControllerBeingUsed( controller ) or menu.unusedControllerAllowed
+	local down = false
+	if usable then
+		local ok, got = pcall( function ()
+			return CoD.BitUtility.IsBitwiseAndNonZero( Engine.GetModelValue( model ), Enum.LUIButtonFlags.FLAG_DOWN )
+		end )
+		down = ok and got == true
+	end
+	Z.TabHoldEdge( menu, controller, source, Z.TabHoldSources[source], "model", down )
 end
 
 Z.AttachTabHold = function ( menu, controller )
@@ -2907,6 +3286,12 @@ Z.AttachTabHold = function ( menu, controller )
 		return
 	end
 	Z.AttachAvailabilityWatch( menu, controller )
+
+	-- The stock strip never steps on its own: basicTabList's LB/RB callbacks
+	-- read this flag.
+	if menu.Tabs ~= nil then
+		menu.Tabs.m_disableNavigation = true
+	end
 
 	-- The arrows themselves, for a mouse. A press moves one category and
 	-- starts the hold; letting go or leaving the button ends it. The stock
@@ -2916,9 +3301,7 @@ Z.AttachTabHold = function ( menu, controller )
 		local source = direction < 0 and "mouse_left" or "mouse_right"
 		button:registerEventHandler( "leftmousedown", function ( element, event )
 			element.zpMouseTabPress = true
-			local who = event.controller or controller
-			Z.NavigateTab( menu, menu.Tabs, who, direction )
-			Z.StartTabHold( menu, who, direction, source )
+			Z.StartTabHold( menu, event.controller or controller, direction, source )
 			return true
 		end )
 		button:registerEventHandler( "leftmouseup", function ()
@@ -2932,87 +3315,57 @@ Z.AttachTabHold = function ( menu, controller )
 				Z.StopTabHold( menu )
 			end
 		end )
-		button:registerEventHandler( "button_action", function ( element )
+		button:registerEventHandler( "button_action", function ( element, event )
 			if element.zpMouseTabPress then
 				element.zpMouseTabPress = nil
 				return true
 			end
-			SendButtonPressToMenuEx( menu, controller, direction < 0
-				and Enum.LUIButton.LUI_KEY_LB or Enum.LUIButton.LUI_KEY_RB )
+			Z.NavigateTab( menu, menu.Tabs, event ~= nil and event.controller or controller, direction )
 			return true
 		end )
 	end
 	attachMouse( menu.TabLeft, -1 )
 	attachMouse( menu.TabRight, 1 )
 
-	-- Q and E, read from the bits rather than from the shortcut event, which
-	-- is the only place a release is published.
-	for _, binding in ipairs( {
-		{ key = "Q", direction = -1, source = "key_left" },
-		{ key = "E", direction = 1, source = "key_right" },
+	-- Q, E and both bumpers, read from their models: the only place a release
+	-- is published.
+	menu.zpHeldShortcutModels = {}
+	local root = Engine.GetModelForController( controller )
+	for source, path in pairs( {
+		Q = "KeyPressBits.Q",
+		E = "KeyPressBits.E",
+		LB = "ButtonBits." .. Enum.LUIButton.LUI_KEY_LB,
+		RB = "ButtonBits." .. Enum.LUIButton.LUI_KEY_RB
 	} ) do
-		local ok, model = pcall( function ()
-			return Engine.GetModel( Engine.GetModelForController( controller ),
-				"KeyPressBits." .. binding.key )
-		end )
+		local ok, model = pcall( Engine.GetModel, root, path )
 		if ok and model ~= nil then
-			menu.zpHeldShortcutModels = menu.zpHeldShortcutModels or {}
-			menu.zpHeldShortcutModels[binding.key] = model
+			menu.zpHeldShortcutModels[model] = source
 			menu:subscribeToModel( model, function ( changed )
-				local down = false
-				local gotOk, got = pcall( function ()
-					return CoD.BitUtility.IsBitwiseAndNonZero(
-						Engine.GetModelValue( changed ), Enum.LUIButtonFlags.FLAG_DOWN )
-				end )
-				down = gotOk and got == true
-				if down then
-					local started = menu.zpTabHoldSource ~= binding.source
-					Z.StartTabHold( menu, controller, binding.direction, binding.source )
-					-- Both roads into the strip are subscribers to this
-					-- model and either can run first, so the stock
-					-- navigation stays eligible until the dispatch is over.
-					if started and menu.zpTabHoldSource == binding.source then
-						local tickOk, tick = pcall( LUI.UITimer.newElementTimer, 1, true, function ()
-							if menu.zpTabHoldSource == binding.source then
-								menu.zpTabHoldFirstStep = nil
-							end
-						end )
-						if tickOk and tick ~= nil then
-							menu:addElement( tick )
-						end
-					end
-				elseif menu.zpTabHoldSource == binding.source
-					and menu.zpTabHoldRawKey ~= binding.source then
-					Z.StopTabHold( menu )
-				end
+				Z.TabHoldModel( menu, controller, source, changed )
 			end, false )
 		end
 	end
 
-	-- The bumpers, and the shortcut event for a keyboard that does not
-	-- publish bits. Whatever was already on gamepad_button still runs.
+	-- The same four as raw events, for a keyboard or pad that does not publish
+	-- bits. Consumed whatever happens: a press that fell through would be a
+	-- second step. Anything else goes on to whatever was there before.
 	local previous = menu.m_eventHandlers ~= nil and menu.m_eventHandlers.gamepad_button or nil
 	menu:registerEventHandler( "gamepad_button", function ( element, event )
-		local direction, source = nil, nil
+		local source = nil
 		local button = event.button
 		if button == "shoulderl" or button == "left_shoulder" or button == Enum.LUIButton.LUI_KEY_LB then
-			direction, source = -1, "left"
+			source = "LB"
 		elseif button == "shoulderr" or button == "right_shoulder" or button == Enum.LUIButton.LUI_KEY_RB then
-			direction, source = 1, "right"
-		elseif button == "key_shortcut" and string.upper( tostring( event.key or "" ) ) == "Q" then
-			direction, source = -1, "key_left"
-		elseif button == "key_shortcut" and string.upper( tostring( event.key or "" ) ) == "E" then
-			direction, source = 1, "key_right"
-		end
-		if direction ~= nil then
-			if event.down == true then
-				Z.StartTabHold( element, event.controller or controller, direction, source )
-				if button == "key_shortcut" then
-					element.zpTabHoldRawKey = source
-				end
-			elseif element.zpTabHoldSource == source then
-				Z.StopTabHold( element )
+			source = "RB"
+		elseif button == "key_shortcut" and type( event.key ) == "string" then
+			local key = string.upper( event.key )
+			if key == "Q" or key == "E" then
+				source = key
 			end
+		end
+		if source ~= nil then
+			Z.TabHoldEdge( element, event.controller or controller, source, Z.TabHoldSources[source], "raw", event.down )
+			return true
 		end
 		if previous ~= nil then
 			return previous( element, event )
@@ -3104,7 +3457,7 @@ end
 -- keep the last row of the tab you just left.
 Z.ShowEmpty = function ( menu )
 	if menu.DetailsTitle ~= nil then
-		menu.DetailsTitle:setText( Z.Text( "MENU_NO_SETTINGS", "NO SETTINGS" ) )
+		menu.DetailsTitle:setText( Z.Text( "ui.no_settings", "NO SETTINGS" ) )
 	end
 	for _, element in ipairs( {
 		menu.DetailsDvar,
@@ -3204,6 +3557,7 @@ end
 -- alone. The shared transaction above is what a bundle uses; this is the
 -- short way round when there is nobody else on the screen.
 Z.ResetAll = function ( controller, menu )
+	Z.ClearPicked()
 	for _, row in ipairs( Z.AllRows ) do
 		Z.TabSet( controller, row.dvar, row.default, row )
 	end
@@ -3220,6 +3574,7 @@ end
 -- the shell can see is the dvar, and the component's own record is its own
 -- business.
 Z.ResetRows = function ( controller, tabs )
+	Z.ClearPicked()
 	local flushed = {}
 	local done = {}
 	local wholeOwner = {}
@@ -3314,6 +3669,7 @@ Z.ResetTab = function ( controller, menu )
 end
 
 Z.RandomizeTab = function ( controller, menu )
+	Z.ClearPicked()
 	local tab = menu ~= nil and menu.zpTab or nil
 	if tab == nil then
 		return
@@ -3388,27 +3744,27 @@ end
 
 Z.AskResetTab = function ( controller, settings )
 	Z.Ask( controller, settings, "ZPauseSettingsResetTab",
-		Z.Text( "MENU_RESET_TAB", "RESET TAB" ),
-		Z.Text( "MENU_RESET_TAB_ASK", "Put every setting on this tab back to its default?" ),
+		Z.Text( "ui.reset_tab", "RESET TAB" ),
+		Z.Text( "ui.reset_tab_ask", "Put every setting on this tab back to its default?" ),
 		Z.ResetTab )
 end
 
 Z.AskRandomize = function ( controller, settings )
 	Z.Ask( controller, settings, "ZPauseSettingsRandomize",
-		Z.Text( "MENU_RANDOMIZE", "RANDOMIZE" ),
-		Z.Text( "MENU_RANDOMIZE_ASK",
+		Z.Text( "ui.randomize", "RANDOMIZE" ),
+		Z.Text( "ui.randomize_ask",
 			"Choose a random value for every setting on this tab? DEFAULT is one of them." ),
 		Z.RandomizeTab )
 end
 
 Z.AskReset = function ( controller, settings )
-	local ask = Z.Text( "MENU_RESET_ASK", "Put every ZPause setting back to its default?" )
+	local ask = Z.Text( "ui.reset_ask", "Put every ZPause setting back to its default?" )
 	if B.IsBundle() then
-		ask = Z.Text( "MENU_RESET_ALL_ASK",
+		ask = Z.Text( "ui.reset_all_ask",
 			"Put every setting on this screen back to its default, for every mod on it?" )
 	end
 	Z.Ask( controller, settings, "ZPauseSettingsReset",
-		Z.Text( "MENU_RESET", "RESET TO DEFAULTS" ), ask, Z.ResetOwner )
+		Z.Text( "ui.reset", "RESET TO DEFAULTS" ), ask, Z.ResetOwner )
 end
 
 Z.Back = function ( menu, controller )
@@ -3422,6 +3778,7 @@ end
 -- ------------------------------------------------------------------------
 
 Z.CreateMenu = function ( controller, menuName )
+	Z.ClearPicked()
 	require( "ui.uieditor.widgets.StartMenu.StartMenu_Options_Slider_Small" )
 	require( "ui.uieditor.widgets.StartMenu.StartMenu_Options_Slider_Control_Item_Small" )
 	require( "ui.uieditor.widgets.Lobby.Common.List1ButtonLarge_PH" )
@@ -3506,7 +3863,8 @@ Z.CreateMenu = function ( controller, menuName )
 				or string.find( text, "^DISABLED: " ) ~= nil
 				or string.find( text, "^LOCKED: " ) ~= nil
 				or string.find( text, "^HOST VALUE" ) ~= nil
-				or string.find( text, "^HOST STATUS" ) ~= nil )
+				or string.find( text, "^HOST STATUS" ) ~= nil
+				or Z.StatePrefixed( text ) )
 		end )
 		widget:setLeftRight( true, false, 0, 215 )
 		widget.TextBox:setHandleMouse( true )
@@ -3682,7 +4040,10 @@ Z.CreateMenu = function ( controller, menuName )
 	local Title = LUI.UIText.new()
 	Title:setLeftRight( true, false, 90, 720 )
 	Title:setTopBottom( true, false, 48, 98 )
-	Title:setText( Z.MenuTitle( tabs ) )
+	-- The first category's own title, MODS included. Z.ShowTab corrects it on
+	-- every later change, but not this first paint: zpTabId is already the
+	-- first tab, so the tabId link that follows returns early.
+	Title:setText( Z.TabTitle( first, tabs ) )
 	Title:setTTF( "fonts/RefrigeratorDeluxe-Regular.ttf" )
 	Title:setAlignment( Enum.LUIAlignment.LUI_ALIGNMENT_LEFT )
 	Title:setAlignment( Enum.LUIAlignment.LUI_ALIGNMENT_MIDDLE )
@@ -3706,7 +4067,7 @@ Z.CreateMenu = function ( controller, menuName )
 		local HostStatus = LUI.UIText.new()
 		HostStatus:setLeftRight( true, false, 950, 1190 )
 		HostStatus:setTopBottom( true, false, 48, 72 )
-		HostStatus:setText( B.HostStatus( controller ) )
+		HostStatus:setText( Z.Shell( B.HostStatus( controller ) ) )
 		HostStatus:setRGB( 1, 0.55, 0.18 )
 		HostStatus:setTTF( "fonts/RefrigeratorDeluxe-Regular.ttf" )
 		HostStatus:setAlignment( Enum.LUIAlignment.LUI_ALIGNMENT_RIGHT )
@@ -3716,7 +4077,11 @@ Z.CreateMenu = function ( controller, menuName )
 	end
 
 	local Subtitle = LUI.UIText.new()
-	Subtitle:setLeftRight( true, false, 92, 720 )
+	-- Wide enough for a category's hint on one line: at 720 the longer ones
+	-- (ZTweaks' Characters, and most hints once translated) wrapped under the
+	-- title. Nothing else sits on its line, so it runs to the page's own right
+	-- edge, the same as the version strip above.
+	Subtitle:setLeftRight( true, false, 92, 1190 )
 	Subtitle:setTopBottom( true, false, 97, 121 )
 	Subtitle:setText( Z.TabHint( first ) )
 	Subtitle:setRGB( 1, 0.55, 0.18 )
@@ -3855,7 +4220,7 @@ Z.CreateMenu = function ( controller, menuName )
 	local DescriptionLabel = LUI.UIText.new()
 	DescriptionLabel:setLeftRight( true, false, 670, 1160 )
 	DescriptionLabel:setTopBottom( true, false, 297, 317 )
-	DescriptionLabel:setText( Z.Text( "MENU_DESCRIPTION", "DESCRIPTION" ) )
+	DescriptionLabel:setText( Z.Text( "ui.description", "DESCRIPTION" ) )
 	DescriptionLabel:setRGB( 1, 0.55, 0.18 )
 	DescriptionLabel:setTTF( "fonts/RefrigeratorDeluxe-Regular.ttf" )
 	DescriptionLabel:setAlignment( Enum.LUIAlignment.LUI_ALIGNMENT_LEFT )
@@ -3879,7 +4244,7 @@ Z.CreateMenu = function ( controller, menuName )
 	local DefaultLabel = LUI.UIText.new()
 	DefaultLabel:setLeftRight( true, false, 670, 800 )
 	DefaultLabel:setTopBottom( true, false, 447, 469 )
-	DefaultLabel:setText( Z.Text( "MENU_DEFAULT", "DEFAULT" ) )
+	DefaultLabel:setText( Z.Text( "ui.default", "DEFAULT" ) )
 	DefaultLabel:setRGB( 1, 0.55, 0.18 )
 	DefaultLabel:setTTF( "fonts/RefrigeratorDeluxe-Regular.ttf" )
 	DefaultLabel:setAlignment( Enum.LUIAlignment.LUI_ALIGNMENT_LEFT )
@@ -3900,7 +4265,7 @@ Z.CreateMenu = function ( controller, menuName )
 	local AppliesLabel = LUI.UIText.new()
 	AppliesLabel:setLeftRight( true, false, 670, 800 )
 	AppliesLabel:setTopBottom( true, false, 485, 507 )
-	AppliesLabel:setText( Z.Text( "MENU_APPLIES", "APPLIES" ) )
+	AppliesLabel:setText( Z.Text( "ui.applies", "APPLIES" ) )
 	AppliesLabel:setRGB( 1, 0.55, 0.18 )
 	AppliesLabel:setTTF( "fonts/RefrigeratorDeluxe-Regular.ttf" )
 	AppliesLabel:setAlignment( Enum.LUIAlignment.LUI_ALIGNMENT_LEFT )
@@ -3920,7 +4285,7 @@ Z.CreateMenu = function ( controller, menuName )
 	local ScopeLabel = LUI.UIText.new()
 	ScopeLabel:setLeftRight( true, false, 670, 800 )
 	ScopeLabel:setTopBottom( true, false, 519, 541 )
-	ScopeLabel:setText( Z.Text( "MENU_SCOPE", "SCOPE" ) )
+	ScopeLabel:setText( Z.Text( "ui.scope", "SCOPE" ) )
 	ScopeLabel:setRGB( 1, 0.55, 0.18 )
 	ScopeLabel:setTTF( "fonts/RefrigeratorDeluxe-Regular.ttf" )
 	ScopeLabel:setAlignment( Enum.LUIAlignment.LUI_ALIGNMENT_LEFT )
@@ -3954,7 +4319,7 @@ Z.CreateMenu = function ( controller, menuName )
 		end
 	end )
 	DefaultLabel:linkToElementModel( Options, "defaultCaption", true, function ( model )
-		DefaultLabel:setText( Engine.GetModelValue( model ) or Z.Text( "MENU_DEFAULT", "DEFAULT" ) )
+		DefaultLabel:setText( Engine.GetModelValue( model ) or Z.Text( "ui.default", "DEFAULT" ) )
 	end )
 	DetailsDefault:linkToElementModel( Options, "defaultText", true, function ( model )
 		local value = Engine.GetModelValue( model )
@@ -3993,8 +4358,8 @@ Z.CreateMenu = function ( controller, menuName )
 	local Reset = CoD.List1ButtonLarge_PH.new( self, controller )
 	Reset:setLeftRight( true, false, 195, 335 )
 	Reset:setTopBottom( true, false, 654, 686 )
-	Reset.btnDisplayText:setText( Z.Text( "MENU_RESET_TAB", "RESET TAB" ) )
-	Reset.btnDisplayTextStroke:setText( Z.Text( "MENU_RESET_TAB", "RESET TAB" ) )
+	Reset.btnDisplayText:setText( Z.Text( "ui.reset_tab", "RESET TAB" ) )
+	Reset.btnDisplayTextStroke:setText( Z.Text( "ui.reset_tab", "RESET TAB" ) )
 	self:addElement( Reset )
 	self.Reset = Reset
 	Reset.id = "Reset"
@@ -4002,8 +4367,8 @@ Z.CreateMenu = function ( controller, menuName )
 	local Randomize = CoD.List1ButtonLarge_PH.new( self, controller )
 	Randomize:setLeftRight( true, false, 345, 475 )
 	Randomize:setTopBottom( true, false, 654, 686 )
-	Randomize.btnDisplayText:setText( Z.Text( "MENU_RANDOMIZE", "RANDOMIZE" ) )
-	Randomize.btnDisplayTextStroke:setText( Z.Text( "MENU_RANDOMIZE", "RANDOMIZE" ) )
+	Randomize.btnDisplayText:setText( Z.Text( "ui.randomize", "RANDOMIZE" ) )
+	Randomize.btnDisplayTextStroke:setText( Z.Text( "ui.randomize", "RANDOMIZE" ) )
 	self:addElement( Randomize )
 	self.Randomize = Randomize
 	Randomize.id = "Randomize"
@@ -4011,8 +4376,8 @@ Z.CreateMenu = function ( controller, menuName )
 	local ResetAll = CoD.List1ButtonLarge_PH.new( self, controller )
 	ResetAll:setLeftRight( true, false, 485, 610 )
 	ResetAll:setTopBottom( true, false, 654, 686 )
-	ResetAll.btnDisplayText:setText( Z.Text( "MENU_RESET_ALL", "RESET ALL" ) )
-	ResetAll.btnDisplayTextStroke:setText( Z.Text( "MENU_RESET_ALL", "RESET ALL" ) )
+	ResetAll.btnDisplayText:setText( Z.Text( "ui.reset_all", "RESET ALL" ) )
+	ResetAll.btnDisplayTextStroke:setText( Z.Text( "ui.reset_all", "RESET ALL" ) )
 	self:addElement( ResetAll )
 	self.ResetAll = ResetAll
 	ResetAll.id = "ResetAll"
@@ -4092,7 +4457,7 @@ Z.CreateMenu = function ( controller, menuName )
 		Z.AskReset( controller, self )
 		return true
 	end, function ( element, menu )
-		CoD.Menu.SetButtonLabel( menu, Enum.LUIButton.LUI_KEY_XBX_PSSQUARE, Z.Text( "MENU_RESET", "RESET TO DEFAULTS" ) )
+		CoD.Menu.SetButtonLabel( menu, Enum.LUIButton.LUI_KEY_XBX_PSSQUARE, Z.Text( "ui.reset", "RESET TO DEFAULTS" ) )
 		return true
 	end, false )
 	self:AddButtonCallbackFunction( self, controller, Enum.LUIButton.LUI_KEY_XBY_PSTRIANGLE, "F", function ()
@@ -4100,19 +4465,20 @@ Z.CreateMenu = function ( controller, menuName )
 		return true
 	end, function ( element, menu )
 		CoD.Menu.SetButtonLabel( menu, Enum.LUIButton.LUI_KEY_XBY_PSTRIANGLE,
-			Z.Text( "MENU_FILTER_CHANGED", "FILTER CHANGED" ) )
+			Z.Text( "ui.filter_changed", "FILTER CHANGED" ) )
 		return true
 	end, false )
 	-- The bumpers, and Q and E for a keyboard. The grid is moved directly
 	-- rather than through a synthetic key: a callback registered against
 	-- LUI_KEY_NONE is not reliably dispatched on PC, and the tab strip is
 	-- the one thing on this page with no other way to reach it.
+	-- Registered so the engine creates and publishes the four models, and
+	-- inert: Z.AttachTabHold steps the strip on the edge, and a callback that
+	-- also stepped would be a second step.
 	self:AddButtonCallbackFunction( self, controller, Enum.LUIButton.LUI_KEY_LB, "Q", function ()
-		Z.NavigateTab( self, Tabs, controller, -1 )
 		return true
 	end, AlwaysFalse, false )
 	self:AddButtonCallbackFunction( self, controller, Enum.LUIButton.LUI_KEY_RB, "E", function ()
-		Z.NavigateTab( self, Tabs, controller, 1 )
 		return true
 	end, AlwaysFalse, false )
 	-- Hold the bumpers or Q/E to keep moving, the arrows to keep moving, and
@@ -4196,7 +4562,7 @@ Z.CreateMenu = function ( controller, menuName )
 			local status = B.HostStatus( controller )
 			if status ~= self.zpHostState then
 				self.zpHostState = status
-				self.HostStatus:setText( status )
+				self.HostStatus:setText( Z.Shell( status ) )
 				Z.QueueRefreshTabs( self, controller, self.zpTabId )
 			end
 			local ok, timer = pcall( LUI.UITimer.newElementTimer, 250, true, pollHost )
@@ -4207,7 +4573,59 @@ Z.CreateMenu = function ( controller, menuName )
 	return self
 end
 
+
+-- ------------------------------------------------------------------------
+-- Losing the menu entry
+--
+-- The bundle-entry contract: in a bundle one owner's factory wins the screen,
+-- and it is NOT whichever loaded first. The shell has two claim mechanisms -
+-- created-when-absent goes to the first loader, a versioned upgrade goes to
+-- the highest version whatever the order - and the shared menu kit installs
+-- as the second. So the winner publishes B.MenuEntry and every other owner
+-- asks for it here.
+--
+-- ZPause publishes no kit version of its own: it has no kit yet and must not
+-- claim one it cannot honour. This is only the asking half, and it has to
+-- exist before anybody wins, because a mod taught to win before the others
+-- are taught to lose is two runtimes on one screen.
+--
+-- Standing down happens by never standing up. Every timer, hold-repeat and
+-- button callback in this file is attached inside a menu, so returning here -
+-- before anything is built - means none of it is ever attached. That is
+-- better than unregistering, which would be a list to keep in step with
+-- every future timer.
+--
+-- Absent or not a function means ZPause builds its own screen, as today. A
+-- dead button when a claim went half-made is worse than the status quo.
+Z.MenuEntryElsewhere = function ( mine )
+	local entry = B ~= nil and B.MenuEntry or nil
+	if type( entry ) ~= "function" then
+		return nil
+	end
+	-- A caller that does not say who it is does not get to delegate. Without
+	-- `mine` there is no way to tell our own handle from somebody else's, and
+	-- delegating blindly is the recursion this guard exists for. Refusing
+	-- means a forgetful call site draws ZPause's own screen, which is the
+	-- same fail-open as every other branch here.
+	--
+	-- ZShare defaults `mine` to its own recorded handle instead, which fits a
+	-- single entry chokepoint. There are three here, each with its own
+	-- factory, so there is no one handle to default to and refusing is the
+	-- half of that decision this shape can take.
+	if type( mine ) ~= "function" then
+		return nil
+	end
+	if entry == mine then
+		return nil
+	end
+	return entry
+end
+
 LUI.createMenu.ZPauseSettings = function ( controller )
+	local elsewhere = Z.MenuEntryElsewhere( LUI.createMenu.ZPauseSettings )
+	if elsewhere ~= nil then
+		return elsewhere( controller )
+	end
 	return Z.CreateMenu( controller, "ZPauseSettings" )
 end
 
@@ -4237,3 +4655,6 @@ if LUI.roots ~= nil and LUI.roots.UIRootFull ~= nil and not CoD.ZPauseStorageKee
 		Z.Keeper()
 	end ) )
 end
+
+-- The row builder a bundle's finalizer recognises as this native generation.
+Z.BundlePresentationNativeRow = Z.Row

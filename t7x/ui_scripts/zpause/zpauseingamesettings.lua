@@ -1,3 +1,7 @@
+-- ZBUNDLE_ENTRY_LOCALIZATION_V1
+-- The pause-menu entry is localized natively: Z.MenuTitle draws from ZPause's
+-- own catalogs in the language on screen, and the row is recognised by that same
+-- title, so a bundle builder finding this marker changes nothing in this file.
 -- ZPause's rows in Black Ops III's own pause menu, during a match.
 --
 -- Two of them. The settings row is the second way into the page
@@ -23,15 +27,25 @@
 -- idempotent -- a source already carrying ours is left alone -- so a pass
 -- that finds nothing new costs a table lookup.
 --
--- Host only, zombies only, the same as the lobby button: everybody's game
--- reads its own settings, but only the host's are the ones the pause runs on.
+-- Zombies only. The settings row is everybody's: a client has their own rows
+-- on the shared page, and the host's are locked one by one inside it. An
+-- action is drawn for whoever its authority says it is for.
 
 local Z = CoD.ZPauseSettings
 local B = CoD.ZBundleSettings
 local P = {}
 
 LUI.createMenu.ZPauseInGameSettings = function ( controller )
+	-- Both entry routes or neither: T7 has two factories and a passing check on
+	-- one proves nothing about the other, so this one asks the same question.
+	-- Z.Startup stays on ZPause's side of the line - it is a storage and
+	-- restore keeper, which rule 4 says never moves into a renderer, so it runs
+	-- whoever owns the screen.
 	Z.Startup( controller )
+	local elsewhere = Z.MenuEntryElsewhere( LUI.createMenu.ZPauseInGameSettings )
+	if elsewhere ~= nil then
+		return elsewhere( controller )
+	end
 	return Z.CreateMenu( controller, "ZPauseInGameSettings" )
 end
 
@@ -45,7 +59,8 @@ P.IsOurs = function ( item, value )
 	if value == nil then
 		return false
 	end
-	if value == Z.Title() or value == "ZPAUSE SETTINGS" or value == "ZBUNDLE SETTINGS" then
+	if value == Z.Title() or value == "ZPAUSE SETTINGS" or value == "ZBUNDLE SETTINGS"
+		or value == Z.Text( "ui.bundle_title", "ZBUNDLE SETTINGS" ) then
 		return true
 	end
 	local ok, text = pcall( Engine.Localize, value )
@@ -56,6 +71,17 @@ end
 -- rather than held in the handler: a mod may have corrected its own
 -- registration since the menu was built, and what the player pressed is the
 -- row as it reads now.
+-- Whether this player is the host, for a host's action. The shared answer
+-- where there is one, failing closed on UNKNOWN; the lobby's own where a
+-- registry this old has none.
+P.AmHost = function ( controller )
+	if B.HostStatus ~= nil then
+		local ok, status = pcall( B.HostStatus, controller )
+		return ok and status == "HOST"
+	end
+	return CoD.ZPauseAPI ~= nil and CoD.ZPauseAPI.IsHost ~= nil and CoD.ZPauseAPI.IsHost() == true
+end
+
 P.Press = function ( id )
 	return function ( self, element, controller )
 		local action = B.ActionById[id]
@@ -63,6 +89,12 @@ P.Press = function ( id )
 			return
 		end
 		if not B.ActionEnabled( action, controller ) then
+			return
+		end
+		-- Authority again at the press, not only when the row was drawn: host
+		-- status can change with the menu open, and a host's action is never
+		-- a client's to fire.
+		if action.authority ~= "player" and not P.AmHost( controller ) then
 			return
 		end
 		pcall( action.action, controller, action )
@@ -102,6 +134,19 @@ P.Place = function ( items )
 	return at
 end
 
+-- The actions this player may press: all of them for the host, and for anybody
+-- else the ones that declare authority = "player". Read from the descriptor
+-- each time, so a mod that corrects its own registration is drawn as it reads now.
+P.ActionsFor = function ( controller, amHost )
+	local result = {}
+	for _, entry in ipairs( B.GetActions( controller ) ) do
+		if amHost or entry.authority == "player" then
+			table.insert( result, entry )
+		end
+	end
+	return result
+end
+
 P.Install = function ()
 	local source = DataSources ~= nil and DataSources.StartMenuGameOptions or nil
 	if source == nil or source.prepare == nil or source.zpauseWrapped then
@@ -134,15 +179,19 @@ P.Install = function ()
 				return
 			end
 			-- The actions first, so the pause sits directly under RESUME
-			-- GAME where a player looking for it would reach for it. They
-			-- are the host's: lifecycle presses rather than settings, and a
-			-- guest pressing one would do nothing.
-			local amHost = B.HostStatus == nil or B.HostStatus( controller ) == "HOST"
-			if amHost and Z.DrawsActionRows() then
-				for _, entry in ipairs( B.GetActions( controller ) ) do
+			-- GAME where a player looking for it would reach for it. Each
+			-- is drawn for whoever its own authority says: an action that
+			-- declares authority = "player" acts on the player who presses
+			-- it - ZPause's pause, which the script puts through the combo's
+			-- gates, and ZStats' HUD toggle - and is every player's; any
+			-- other action is a host's press and stays the host's. Whole
+			-- list host-gated until 1.7, so a client saw neither.
+			local amHost = P.AmHost( controller )
+			if Z.DrawsActionRows() then
+				for _, entry in ipairs( P.ActionsFor( controller, amHost ) ) do
 					local action = Engine.CreateModel( root, "zpauseAction_" .. entry.id )
 					Engine.SetModelValue( Engine.CreateModel( action, "displayText" ),
-						B.ActionLabel( entry, controller ) )
+						Z.ActionWords( entry, controller ) )
 					Engine.SetModelValue( Engine.CreateModel( action, "action" ), P.Press( entry.id ) )
 					table.insert( items, at, {
 						model = action,
@@ -175,5 +224,10 @@ if LUI.roots ~= nil and LUI.roots.UIRootFull ~= nil and not CoD.ZPausePauseEntry
 	CoD.ZPausePauseEntryWatching = true
 	LUI.roots.UIRootFull:addElement( LUI.UITimer.newElementTimer( 500, false, function ()
 		P.Install()
+		-- And the state a client's row reads, in case the root was not there
+		-- when zpausesettings.lua first asked.
+		if CoD.ZPauseAPI ~= nil and CoD.ZPauseAPI.WatchState ~= nil then
+			CoD.ZPauseAPI.WatchState()
+		end
 	end ) )
 end
