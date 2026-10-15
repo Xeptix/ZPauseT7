@@ -4,7 +4,7 @@
 // ===== BEGIN ZPAUSE =====
 /*
 ======================================================================
-    ZPAUSE T7 v1.7  --  Synced co-op pause for Black Ops III Zombies
+    ZPAUSE T7 v1.8  --  Synced co-op pause for Black Ops III Zombies
 
     by Xep
 
@@ -6282,7 +6282,7 @@ zpause__zp_ui_tell( active, paused, menu, allowed, again )
 zpause__zp_version()
 {
     // ZP_VERSION_BEGIN
-    return "1.7";
+    return "1.8";
     // ZP_VERSION_END
 }
 

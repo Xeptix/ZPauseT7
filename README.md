@@ -805,6 +805,12 @@ for what each engine can actually do.
 
 ## Changelog
 
+### v1.8
+
+- **The category strip stays where it was when a setting changes.** On Black Ops III, changing a
+  setting on a later category kept that category selected but slid it to the other end of the
+  strip; it now stays in the cell it was in.
+
 ### v1.7
 
 - **The t7-compiler build runs alongside Xep's other mods.** Its folder now holds
