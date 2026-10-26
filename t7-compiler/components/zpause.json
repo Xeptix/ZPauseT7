@@ -2,11 +2,11 @@
   "format": 2,
   "id": "zpause",
   "source": "src/forks/t7/zpause.gsc",
-  "sourceSha256": "8d04588b4e998534df4f2b113904af58b42aa7389a426cc764351c76dd778dcd",
+  "sourceSha256": "3285b067113221a5db8691ec8c97451be82feaee87146cc092277a8482731305",
   "sourceNamespace": "zpause",
-  "functionCount": 206,
+  "functionCount": 207,
   "generatedPrefix": "zpause__",
-  "generatedSourceSha256": "4dd92119b329d84ebaa2a1b7334675c71ec0a190102d06d5f13d58d8d2d081ba",
+  "generatedSourceSha256": "bb322f7b3dba802aa25f746762dd7196c13a09f5dd7bcc176ae7fe344d1f342d",
   "injectionTarget": "scripts/shared/duplicaterender_mgr.gsc",
   "namespace": "zbundle"
 }

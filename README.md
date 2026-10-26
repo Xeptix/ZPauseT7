@@ -805,6 +805,17 @@ for what each engine can actually do.
 
 ## Changelog
 
+### v1.9
+
+- **Opening the pause menu pauses again.** With `zp_pause_menu` on `own` or `room`, opening Black
+  Ops III's own pause menu did nothing in a co-op game, for the host and for every other player.
+  The menu's message to the game now goes out under the pause menu's own name, which the game
+  delivers, so the menu pauses and closing it resumes. A player's **PAUSE GAME** press travels the
+  same way, so it now reaches the game from every player's menu, not just the host's.
+- **The pause names who paused.** On the Workshop build, a pause called with the combo or a chat
+  command read "paused by someone" on every screen. It shows the player's name now, in the
+  on-screen line and in the chat messages that name a player.
+
 ### v1.8
 
 - **The category strip stays where it was when a setting changes.** On Black Ops III, changing a
